@@ -1,0 +1,60 @@
+/* Settings → Microsoft 365 Copilot */
+.m365-status {
+  display: inline-block;
+  margin-left: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-muted);
+  color: var(--muted-strong);
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: var(--font-medium);
+  vertical-align: 1px;
+}
+
+.m365-status--ready {
+  background: color-mix(in srgb, var(--success) 16%, transparent);
+  color: var(--text-strong);
+}
+
+.m365-status--waiting-for-sign-in,
+.m365-status--starting {
+  background: var(--accent-tint-bg);
+  color: var(--text-strong);
+}
+
+.m365-status--error,
+.m365-status--python-missing {
+  background: color-mix(in srgb, var(--error) 14%, transparent);
+  color: var(--text-strong);
+}
+
+.m365-log {
+  width: 100%;
+  max-height: 160px;
+  margin: 0;
+  overflow: auto;
+  color: var(--muted-strong);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+/* Settings rows draw buttons as quiet pills; Connect is the page's one main action. */
+.settings-row .button.m365-primary {
+  min-height: 32px;
+  padding: 0 16px;
+  border-color: var(--button-primary-border);
+  background: var(--button-primary-bg);
+  color: var(--button-primary-ink);
+}
+
+.settings-row .button.m365-primary:hover:not(:disabled) {
+  border-color: var(--button-primary-hover-border);
+  background: var(--button-primary-hover-bg);
+}
+
+.settings-row .button.m365-primary:disabled {
+  border-color: var(--button-primary-disabled-border);
+  background: var(--button-primary-disabled-bg);
+  color: var(--button-primary-disabled-ink);
+}

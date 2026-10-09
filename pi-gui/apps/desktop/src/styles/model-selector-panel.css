@@ -1,0 +1,209 @@
+/* =============================================================================
+ * Model selector — composer-footer trigger + dropdown.
+ * Extracted from main.css. The trigger is promoted from bare gray text to a
+ * discrete pill control so the active model/thinking level reads as a real
+ * affordance (Codex parity).
+ * ========================================================================== */
+
+.model-selector {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  position: relative;
+  max-width: 100%;
+}
+
+.model-selector__anchor {
+  position: relative;
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.model-selector__badge {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 28px;
+  min-width: 0;
+  padding: 4px 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  overflow-wrap: anywhere;
+  text-align: left;
+  color: var(--muted-strong);
+  font-size: 12px;
+  font-weight: var(--font-medium);
+  letter-spacing: -0.01em;
+  transition:
+    background var(--motion-base) var(--ease-out),
+    border-color var(--motion-base) var(--ease-out),
+    color var(--motion-base) var(--ease-out);
+}
+
+.model-selector__badge:hover:not(:disabled) {
+  background: var(--overlay-hover);
+  border-color: var(--border-heavy);
+  color: var(--text-strong);
+}
+
+.model-selector__badge:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.model-selector__dropdown {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  margin-bottom: 6px;
+  min-width: 280px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--elevation-menu);
+  z-index: 20;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+
+.model-selector__filter {
+  padding: 4px 8px 8px;
+  position: sticky;
+  top: 0;
+  background: var(--surface);
+  z-index: 1;
+}
+
+.model-selector__filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.model-selector__filter-input:focus {
+  border-color: var(--accent);
+}
+
+.model-selector__dropdown--below {
+  bottom: auto;
+  top: 100%;
+  margin-bottom: 0;
+  margin-top: 6px;
+}
+
+.model-selector__group-title {
+  padding: 6px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.model-selector__empty {
+  padding: 0 10px 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+.model-selector__item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.model-selector__item:hover:not(:disabled) {
+  background: var(--surface-muted);
+}
+
+.model-selector__item--active {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.model-selector__item-label {
+  flex: 1;
+}
+
+.model-selector__item-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* Extension flags: set in New thread, shown read-only on a started thread */
+.extension-flags__dropdown {
+  min-width: 320px;
+  max-width: 420px;
+}
+
+.extension-flags__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+}
+
+.extension-flags__name {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.extension-flags__flag {
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.extension-flags__input {
+  flex: none;
+  width: 128px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.extension-flags__input:focus {
+  border-color: var(--accent);
+}
+
+.extension-flags__badge--readonly {
+  cursor: default;
+}
+
+.model-selector__badge.extension-flags__badge--readonly:hover {
+  background: var(--surface-muted);
+  border-color: transparent;
+  color: var(--muted-strong);
+}
