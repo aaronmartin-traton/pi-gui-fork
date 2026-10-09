@@ -25,7 +25,7 @@ The installed public packages were used, rather than the cached Pico branch:
 
 These pre-implementation probes used a JSON-copying loopback adapter within the browser and an inline Pi extension. They establish Chord feasibility, not proof of the subsequently implemented Electron transport, asset containment or frontend isolation. Keep their evidence separate from the final product gates below.
 
-Evidence scripts and result JSON are retained in `/private/tmp/pi-gui-chord-087-probe-4r9zmy/`: `run-node.mjs`, `run-browser.mjs`, `run-bootstrap.mjs`, `browser-result.json` and `bootstrap-result.json`. Public source: [Chord 0.87.0](https://github.com/earendil-works/pi/tree/v0.87.0/packages/chord), [Coding Agent package exports](https://github.com/earendil-works/pi/blob/v0.87.0/packages/coding-agent/package.json).
+Evidence scripts and result JSON are retained in `a local scratch directory (not retained)`: `run-node.mjs`, `run-browser.mjs`, `run-bootstrap.mjs`, `browser-result.json` and `bootstrap-result.json`. Public source: [Chord 0.87.0](https://github.com/earendil-works/pi/tree/v0.87.0/packages/chord), [Coding Agent package exports](https://github.com/earendil-works/pi/blob/v0.87.0/packages/coding-agent/package.json).
 
 ## Author contract
 

@@ -166,7 +166,7 @@ These commands use the installed repository toolchain and do not launch Electron
 
 ```sh
 node examples/desktop-extensions/pr-review/test.mjs
-node --experimental-strip-types --test examples/desktop-extensions/test-runs/test/run-owner.test.mts
+node --experimental-strip-types --test examples/desktop-extensions/test-runs/test/run-<redacted>.test.mts
 node node_modules/typescript/bin/tsc -p examples/desktop-extensions/pr-review/tsconfig.json
 node node_modules/typescript/bin/tsc -p examples/desktop-extensions/test-runs/tsconfig.json
 node examples/desktop-extensions/pr-review/build.mjs --check
