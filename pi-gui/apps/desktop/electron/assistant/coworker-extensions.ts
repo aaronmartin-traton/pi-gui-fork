@@ -146,3 +146,59 @@ function isTextPart(part: unknown): part is { type: "text"; text: string } {
 function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
+
+/**
+ * Commands that can destroy data, the machine, or the repo. The guard refuses them
+ * outright (a non-technical person should not be able to approve these by habit).
+ * The list is intentionally short and reviewed; it is not a sandbox.
+ */
+export const DESTRUCTIVE_COMMAND_PATTERNS: readonly RegExp[] = [
+  /\brm\s+(?:-[a-z-]*\s+)*-[a-z-]*r[a-z-]*f|\brm\s+(?:-[a-z-]*\s+)*-[a-z-]*f[a-z-]*r/i, // rm -rf / -fr
+  /\brm\s+(?:--recursive|-[a-z-]*r[a-z-]*)\b[^\n]*(?:--force|-[a-z-]*f)/i,
+  /\bmkfs(?:\.[a-z0-9]+)?\b/i,
+  /\bdd\b[^\n]*\bof=\/dev\//i,
+  /\bformat\s+[a-z]:/i,
+  /\b(?:del|erase)\s+(?:\/[a-z]+\s+)*\/[a-z]*[fsq]/i,
+  /\brmdir\s+(?:\/[a-z]+\s+)*\/[a-z]*s/i,
+  /\bRemove-Item\b(?=[^\n]*-Recurse)(?=[^\n]*-Force)/i,
+  /\b(?:shutdown|Stop-Computer|Restart-Computer)\b/i,
+  /\bgit\s+push\b[^\n]*(?:--force(?!-with-lease)|\s-f\b)/i,
+  /\breg\s+(?:add|delete)\b/i,
+  /\bcipher\s+\/w\b/i,
+  /\bvssadmin\s+delete\s+shadows/i,
+  /\bdiskpart\b/i,
+  /:\s*\(\s*\)\s*\{.*\|.*&\s*\}\s*;\s*:/, // fork bomb
+];
+
+/** Returns the matched pattern's source, or null when the command is allowed. */
+export function findDestructiveCommand(command: string): string | null {
+  for (const pattern of DESTRUCTIVE_COMMAND_PATTERNS) {
+    if (pattern.test(command)) return pattern.source;
+  }
+  return null;
+}
+
+/**
+ * Refuses destructive shell commands before they run. Unlike "Ask before changes",
+ * this is a hard block, not a prompt — the point is to stop the accidental
+ * `rm -rf` even when the person would click yes.
+ */
+export function createDestructiveCommandGuardExtension(): ExtensionFactory {
+  return (pi) => {
+    pi.on("tool_call", (event) => {
+      if (event.toolName !== "bash" && event.toolName !== "powershell") {
+        return undefined;
+      }
+      const command = typeof event.input.command === "string" ? event.input.command : "";
+      if (!findDestructiveCommand(command)) {
+        return undefined;
+      }
+      return {
+        block: true,
+        reason:
+          "This command is blocked because it can destroy data or the machine. " +
+          "Explain what you are trying to do and use a safer, more specific command.",
+      };
+    });
+  };
+}
