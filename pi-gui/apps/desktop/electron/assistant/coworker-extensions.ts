@@ -18,7 +18,13 @@ export function createGenerativeUiExtension(): ExtensionFactory {
 }
 
 /** Tools that only read; everything else changes files or runs commands. */
-const READ_ONLY_TOOLS: ReadonlySet<string> = new Set(["read", "grep", "find", "ls"]);
+const READ_ONLY_TOOLS: Record<string, true> = {
+  read: true,
+  grep: true,
+  find: true,
+  ls: true,
+  web_search: true,
+};
 
 /**
  * Codex's "suggest" approval mode (as in open-codex): pi asks before every tool that can
@@ -32,7 +38,7 @@ export function createAskBeforeChangesExtension(
     pi.on("tool_call", async (event, ctx) => {
       if (
         !isActive() ||
-        READ_ONLY_TOOLS.has(event.toolName) ||
+        READ_ONLY_TOOLS[event.toolName] === true ||
         event.parentToolCallId ||
         !ctx.hasUI
       ) {
@@ -147,27 +153,51 @@ function truncate(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** A command may be prefixed by a segment separator or sudo before the risky verb. */
+const AT_COMMAND = String.raw`(?:^|[;&|(]\s*|\bsudo\s+)`;
+
 /**
  * Commands that can destroy data, the machine, or the repo. The guard refuses them
  * outright (a non-technical person should not be able to approve these by habit).
  * The list is intentionally short and reviewed; it is not a sandbox.
  */
 export const DESTRUCTIVE_COMMAND_PATTERNS: readonly RegExp[] = [
-  /\brm\s+(?:-[a-z-]*\s+)*-[a-z-]*r[a-z-]*f|\brm\s+(?:-[a-z-]*\s+)*-[a-z-]*f[a-z-]*r/i, // rm -rf / -fr
-  /\brm\s+(?:--recursive|-[a-z-]*r[a-z-]*)\b[^\n]*(?:--force|-[a-z-]*f)/i,
-  /\bmkfs(?:\.[a-z0-9]+)?\b/i,
-  /\bdd\b[^\n]*\bof=\/dev\//i,
-  /\bformat\s+[a-z]:/i,
-  /\b(?:del|erase)\s+(?:\/[a-z]+\s+)*\/[a-z]*[fsq]/i,
-  /\brmdir\s+(?:\/[a-z]+\s+)*\/[a-z]*s/i,
-  /\bRemove-Item\b(?=[^\n]*-Recurse)(?=[^\n]*-Force)/i,
-  /\b(?:shutdown|Stop-Computer|Restart-Computer)\b/i,
-  /\bgit\s+push\b[^\n]*(?:--force(?!-with-lease)|\s-f\b)/i,
-  /\breg\s+(?:add|delete)\b/i,
-  /\bcipher\s+\/w\b/i,
-  /\bvssadmin\s+delete\s+shadows/i,
-  /\bdiskpart\b/i,
-  /:\s*\(\s*\)\s*\{.*\|.*&\s*\}\s*;\s*:/, // fork bomb
+  // rm with BOTH a recursive and a force flag, in any order, on one command segment.
+  new RegExp(
+    AT_COMMAND +
+      String.raw`rm\b(?=[^\n;&|]*\s-(?:-recursive\b|[a-z]*r))(?=[^\n;&|]*\s-(?:-force\b|[a-z]*f))`,
+    "i",
+  ),
+  new RegExp(AT_COMMAND + String.raw`(?:wipefs|blkdiscard|sgdisk|pvcreate|vgremove)\b`, "i"),
+  new RegExp(AT_COMMAND + String.raw`mkfs(?:\.[a-z0-9]+)?\b`, "i"),
+  new RegExp(AT_COMMAND + String.raw`parted\b[^\n;&|]*\bmklabel\b`, "i"),
+  new RegExp(AT_COMMAND + String.raw`dd\b[^\n;&|]*\bof=\/dev\/`, "i"),
+  new RegExp(AT_COMMAND + String.raw`format\s+[a-z]:`, "i"),
+  new RegExp(AT_COMMAND + String.raw`(?:del|erase)\b(?=[^\n;&|]*\s\/[a-z]*[fsq])`, "i"),
+  new RegExp(AT_COMMAND + String.raw`(?:rmdir|rd)\b(?=[^\n;&|]*\s\/[a-z]*s)`, "i"),
+  new RegExp(
+    AT_COMMAND + String.raw`Remove-Item\b(?=[^\n;&|]*\s-r[a-z]*\b)(?=[^\n;&|]*\s-f[a-z]*\b)`,
+    "i",
+  ),
+  new RegExp(
+    AT_COMMAND + String.raw`(?:shutdown|Stop-Computer|Restart-Computer)\b(?!\s+(?:--help|-h|\/\?))`,
+    "i",
+  ),
+  new RegExp(
+    AT_COMMAND +
+      String.raw`git\s+push\b[^\n;&|]*(?:--force(?!-with-lease|-if-includes)|\s-f\b|\s\+\S)`,
+    "i",
+  ),
+  new RegExp(AT_COMMAND + String.raw`reg\s+(?:add|delete)\b`, "i"),
+  new RegExp(AT_COMMAND + String.raw`cipher\s+\/w\b`, "i"),
+  new RegExp(AT_COMMAND + String.raw`vssadmin\s+delete\s+shadows`, "i"),
+  new RegExp(AT_COMMAND + String.raw`diskpart\b(?!\s+(?:--help|-h|\/\?))`, "i"),
+  new RegExp(AT_COMMAND + String.raw`bcdedit\b[^\n;&|]*\/delete\b`, "i"),
+  new RegExp(AT_COMMAND + String.raw`systemctl\s+(?:poweroff|reboot|halt)\b`, "i"),
+  new RegExp(
+    AT_COMMAND + String.raw`[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{[^}]*\|[^}]*&[^}]*\}`,
+    "i",
+  ),
 ];
 
 /** Returns the matched pattern's source, or null when the command is allowed. */

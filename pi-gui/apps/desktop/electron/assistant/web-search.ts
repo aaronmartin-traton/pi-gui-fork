@@ -10,6 +10,9 @@ import type { ExtensionFactory, ToolDefinition } from "@earendil-works/pi-coding
 const MAX_RESULTS = 6;
 const MAX_SNIPPET = 400;
 const MAX_OUTPUT_CHARS = 8_000;
+const SEARCH_TIMEOUT_MS = 15_000;
+const USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36";
 
 export interface WebSearchResult {
   readonly title: string;
@@ -20,44 +23,76 @@ export interface WebSearchResult {
 /** Pure: turn the DuckDuckGo HTML results page into structured results. */
 export function parseDuckDuckGoHtml(html: string): WebSearchResult[] {
   const results: WebSearchResult[] = [];
-  const blockPattern = /<a[^>]+class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-  for (const match of html.matchAll(blockPattern)) {
-    const href = match[1];
-    const rawTitle = match[2];
+  // Split per result block so a title and its own snippet stay together, even
+  // when a block has no snippet.
+  const blocks = html.split(/<div[^>]*class="[^"]*?\bresult\b/).slice(1);
+  for (const block of blocks) {
+    if (/\bresult--ad\b/.test(block)) continue;
+    const anchor = /<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(block);
+    const href = anchor?.[1];
+    const rawTitle = anchor?.[2];
     if (!href || !rawTitle) continue;
     const url = decodeResultUrl(href);
-    const title = stripTags(rawTitle).trim();
-    if (url && title) results.push({ title, url, snippet: "" });
+    if (!url || /\/y\.js\b/.test(url)) continue;
+    const title = decodeEntities(stripTags(rawTitle)).trim();
+    if (!title) continue;
+    const rawSnippet = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/.exec(block)?.[1];
+    const snippet = rawSnippet
+      ? decodeEntities(stripTags(rawSnippet)).trim().slice(0, MAX_SNIPPET)
+      : "";
+    results.push({ title, url, snippet });
     if (results.length >= MAX_RESULTS) break;
-  }
-  const snippetPattern = /class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-  let index = 0;
-  for (const match of html.matchAll(snippetPattern)) {
-    const existing = results[index];
-    if (!existing) break;
-    const snippet = stripTags(match[1] ?? "").trim().slice(0, MAX_SNIPPET);
-    results[index] = { ...existing, snippet };
-    index += 1;
   }
   return results;
 }
 
-/** DuckDuckGo wraps links as //duckduckgo.com/l/?uddg=<encoded>; unwrap them. */
+/** Unwrap DuckDuckGo's `//duckduckgo.com/l/?uddg=<encoded>` redirect links only. */
 function decodeResultUrl(href: string): string {
   const decoded = href.replace(/&amp;/g, "&");
-  const encoded = /[?&]uddg=([^&]+)/.exec(decoded)?.[1];
-  if (encoded) {
-    try {
-      return decodeURIComponent(encoded);
-    } catch {
-      return decoded;
+  const absolute = decoded.startsWith("//") ? `https:${decoded}` : decoded;
+  try {
+    const url = new URL(absolute);
+    if (url.hostname.endsWith("duckduckgo.com") && url.pathname === "/l/") {
+      return url.searchParams.get("uddg") ?? absolute;
     }
+    return absolute;
+  } catch {
+    return absolute;
   }
-  return decoded.startsWith("//") ? `https:${decoded}` : decoded;
 }
 
 function stripTags(value: string): string {
-  return value.replace(/<[^>]*>/g, "").replace(/&amp;/g, "&").replace(/&quot;/g, '"');
+  return value.replace(/<[^>]*>/g, "");
+}
+
+/** Decode entities in one pass, so `&amp;quot;` never double-decodes to `"`. */
+function decodeEntities(value: string): string {
+  return value.replace(
+    /&(#x[0-9a-f]+|#\d+|quot|lt|gt|apos|nbsp|amp);/gi,
+    (match, entity: string) => {
+      const lower = entity.toLowerCase();
+      switch (lower) {
+        case "quot":
+          return '"';
+        case "lt":
+          return "<";
+        case "gt":
+          return ">";
+        case "apos":
+          return "'";
+        case "nbsp":
+          return " ";
+        case "amp":
+          return "&";
+        default: {
+          const code = lower.startsWith("#x")
+            ? Number.parseInt(lower.slice(2), 16)
+            : Number.parseInt(lower.slice(1), 10);
+          return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+        }
+      }
+    },
+  );
 }
 
 export function formatWebSearchResults(query: string, results: readonly WebSearchResult[]): string {
@@ -74,21 +109,35 @@ export function formatWebSearchResults(query: string, results: readonly WebSearc
 }
 
 async function fetchSearchResults(query: string, signal?: AbortSignal): Promise<WebSearchResult[]> {
-  const response = await fetch(`https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`, {
-    signal,
-    headers: {
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
-    },
-  });
-  if (!response.ok) {
-    throw new Error(`web search failed with status ${response.status}`);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), SEARCH_TIMEOUT_MS);
+  const forwardAbort = () => controller.abort();
+  signal?.addEventListener("abort", forwardAbort, { once: true });
+  try {
+    const response = await fetch(
+      `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+      {
+        signal: controller.signal,
+        headers: { "User-Agent": USER_AGENT },
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`web search failed with status ${response.status}`);
+    }
+    return parseDuckDuckGoHtml(await response.text());
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", forwardAbort);
   }
-  return parseDuckDuckGoHtml(await response.text());
 }
 
 function queryFromParams(params: unknown): string {
-  if (params && typeof params === "object" && "query" in params && typeof params.query === "string") {
+  if (
+    params &&
+    typeof params === "object" &&
+    "query" in params &&
+    typeof params.query === "string"
+  ) {
     return params.query.trim();
   }
   return "";

@@ -1029,6 +1029,12 @@ app
           factory: createGenerativeUiExtension(),
         },
         {
+          name: "pi-gui-destructive-command-guard",
+          displayName: "Block destructive commands",
+          description: "Refuses commands that can destroy data or the machine",
+          factory: createDestructiveCommandGuardExtension(),
+        },
+        {
           name: "pi-gui-ask-before-changes",
           displayName: "Ask before changes",
           description: "pi asks before it edits files or runs commands",
@@ -1036,12 +1042,6 @@ app
           factory: createAskBeforeChangesExtension(
             () => !process.env.PI_APP_TEST_MODE || process.env.PI_GUI_ASK_BEFORE_CHANGES === "1",
           ),
-        },
-        {
-          name: "pi-gui-destructive-command-guard",
-          displayName: "Block destructive commands",
-          description: "Refuses commands that can destroy data or the machine",
-          factory: createDestructiveCommandGuardExtension(),
         },
         {
           name: "pi-gui-web-search",

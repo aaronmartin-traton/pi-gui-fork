@@ -43,6 +43,8 @@ export class M365CopilotConnector {
   private python: PythonCommand | null | undefined;
   private starting: Promise<M365CopilotStatus> | undefined;
   private readonly log: string[] = [];
+  private generation = 0;
+  private readonly pending = { stdout: "", stderr: "" };
   readonly baseUrl: string;
 
   constructor(private readonly options: M365CopilotConnectorOptions) {
@@ -106,11 +108,15 @@ export class M365CopilotConnector {
       return this.status();
     }
     this.lastError = undefined;
+    const generation = this.generation;
     this.python = await findPython(this.options.platform);
-    if (!this.python) {
+    if (!this.python || generation !== this.generation) {
       return this.status();
     }
     await mkdir(this.options.dataDir, { recursive: true });
+    if (generation !== this.generation) {
+      return this.status();
+    }
     const port = portFromBaseUrl(this.baseUrl);
     const child = spawn(
       this.python.command,
@@ -132,27 +138,33 @@ export class M365CopilotConnector {
       },
     );
     this.child = child;
-    const record = (chunk: Buffer) => {
-      for (const line of chunk.toString("utf8").split(/\r?\n/)) {
+    this.pending.stdout = "";
+    this.pending.stderr = "";
+    const record = (stream: "stdout" | "stderr") => (chunk: Buffer) => {
+      const lines = (this.pending[stream] += chunk.toString("utf8")).split(/\r?\n/);
+      this.pending[stream] = lines.pop() ?? "";
+      for (const line of lines) {
         if (line.trim()) this.log.push(line);
       }
       this.log.splice(0, Math.max(0, this.log.length - LOG_LINES));
     };
-    child.stdout?.on("data", record);
-    child.stderr?.on("data", record);
+    child.stdout?.on("data", record("stdout"));
+    child.stderr?.on("data", record("stderr"));
     child.once("error", (error) => {
       this.lastError = `Could not start the Copilot connection: ${error.message}`;
     });
-    child.once("exit", (code) => {
+    // 'close' fires after stdio drains; 'exit' can fire before the last lines arrive.
+    child.once("close", (code) => {
       if (this.child === child) this.child = undefined;
-      if (code !== 0 && code !== null) {
-        this.lastError = describeExit(code, this.log);
+      if (!this.lastError && code !== 0 && code !== null) {
+        this.lastError = describeExit(code, this.log, port);
       }
     });
     return this.status();
   }
 
   stop(): void {
+    this.generation += 1;
     const child = this.child;
     this.child = undefined;
     if (child && child.exitCode === null) {
@@ -174,35 +186,45 @@ export class M365CopilotConnector {
       // Plain fetch, not Electron's net: loopback traffic must not go through a corporate proxy.
       const response = await fetch(`${origin}/healthz`, { signal: AbortSignal.timeout(1500) });
       if (response.ok) {
-        const body = (await response.json()) as {
-          token?: { valid?: unknown; seconds_remaining?: unknown };
-        };
-        const seconds =
-          typeof body.token?.seconds_remaining === "number"
-            ? body.token.seconds_remaining
-            : undefined;
-        return {
-          kind: "token",
-          valid: body.token?.valid === true,
-          ...(seconds !== undefined ? { minutesLeft: Math.floor(seconds / 60) } : {}),
-        };
+        try {
+          const body = (await response.json()) as {
+            token?: { valid?: unknown; seconds_remaining?: unknown };
+          };
+          const seconds =
+            typeof body.token?.seconds_remaining === "number"
+              ? body.token.seconds_remaining
+              : undefined;
+          return {
+            kind: "token",
+            valid: body.token?.valid === true,
+            ...(seconds !== undefined ? { minutesLeft: Math.floor(seconds / 60) } : {}),
+          };
+        } catch {
+          // A non-JSON /healthz: fall through to the /models check below.
+        }
+      } else {
+        await response.body?.cancel();
       }
-      // Another OpenAI-compatible M365 proxy without /healthz.
+      // Another OpenAI-compatible M365 proxy without a JSON /healthz.
       const models = await fetch(`${this.baseUrl}/models`, { signal: AbortSignal.timeout(1500) });
-      return models.ok ? { kind: "openai" } : { kind: "none" };
+      if (models.ok) {
+        return { kind: "openai" };
+      }
+      await models.body?.cancel();
+      return { kind: "none" };
     } catch {
       return { kind: "none" };
     }
   }
 }
 
-function describeExit(code: number, log: readonly string[]): string {
+function describeExit(code: number, log: readonly string[], port: string): string {
   const output = log.join("\n");
   if (/msedge(\.exe)?/i.test(output) && /No such file|cannot find|not found/i.test(output)) {
     return "Microsoft Edge is needed to sign in to Copilot, but it was not found. Install Edge, then click Connect again.";
   }
   if (/Address already in use|Only one usage of each socket address/i.test(output)) {
-    return "Another program is using the Copilot connection's port (8000). Close it, or set PI_GUI_M365_PROXY_URL to a different address.";
+    return `Another program is using the Copilot connection's port (${port}). Close it, or set PI_GUI_M365_PROXY_URL to a different address.`;
   }
   return `The Copilot connection stopped unexpectedly (exit code ${code}). Details are below.`;
 }

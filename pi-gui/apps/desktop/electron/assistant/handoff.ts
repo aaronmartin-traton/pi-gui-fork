@@ -39,12 +39,30 @@ function labelForRole(role: string): string {
   return role;
 }
 
-/** Extract plain text from pi's message transcript, dropping tool/attachment noise. */
+/** Collect the current branch's message entries from the session manager. */
+export function branchMessages(branch: readonly unknown[]): unknown[] {
+  const messages: unknown[] = [];
+  for (const entry of branch) {
+    if (
+      entry &&
+      typeof entry === "object" &&
+      "type" in entry &&
+      entry.type === "message" &&
+      "message" in entry
+    ) {
+      messages.push(entry.message);
+    }
+  }
+  return messages;
+}
+
+/** Keep only user and assistant text; drop tool results, bash output and custom entries. */
 export function handoffMessagesFromTranscript(messages: readonly unknown[]): HandoffMessage[] {
   const out: HandoffMessage[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") continue;
     if (!("role" in message) || typeof message.role !== "string") continue;
+    if (message.role !== "user" && message.role !== "assistant") continue;
     const text = "content" in message ? contentToText(message.content) : "";
     if (text) out.push({ role: message.role, text });
   }
@@ -66,15 +84,12 @@ function textOfPart(part: unknown): string {
 
 export function createHandoffExtension(bridge: OrchestrationRuntimeBridge): ExtensionFactory {
   return (pi: ExtensionAPI) => {
-    let transcript: HandoffMessage[] = [];
-    pi.on("context", (event) => {
-      transcript = handoffMessagesFromTranscript(event.messages);
-    });
     pi.registerCommand("handoff", {
       description: "Continue this thread in a new child thread, carrying the transcript",
       handler: async (_args, ctx) => {
+        const messages = branchMessages(ctx.sessionManager.getBranch());
         await bridge.createChildThread(ctx, {
-          prompt: formatHandoffPrompt(transcript),
+          prompt: formatHandoffPrompt(handoffMessagesFromTranscript(messages)),
           toolCallId: `handoff-${Date.now()}`,
         });
       },
