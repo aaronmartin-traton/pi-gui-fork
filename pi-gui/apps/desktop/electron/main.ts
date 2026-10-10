@@ -18,6 +18,8 @@ import {
   createDestructiveCommandGuardExtension,
   createGenerativeUiExtension,
 } from "./assistant/coworker-extensions";
+import { createHandoffExtension } from "./assistant/handoff";
+import { createWebSearchExtension } from "./assistant/web-search";
 import { M365CopilotConnector } from "./platform/m365-copilot";
 import { isValidHttpBaseUrl } from "@pi-gui/pi-sdk-driver";
 import { createRequire } from "node:module";
@@ -1040,6 +1042,18 @@ app
           displayName: "Block destructive commands",
           description: "Refuses commands that can destroy data or the machine",
           factory: createDestructiveCommandGuardExtension(),
+        },
+        {
+          name: "pi-gui-web-search",
+          displayName: "Web search",
+          description: "Lets pi search the web and use the results",
+          factory: createWebSearchExtension(),
+        },
+        {
+          name: "pi-gui-handoff",
+          displayName: "Handoff",
+          description: "Continue this thread in a new thread with /handoff",
+          factory: createHandoffExtension(orchestrationRuntimeBridge),
         },
         {
           name: "pi-gui-context-trim",
