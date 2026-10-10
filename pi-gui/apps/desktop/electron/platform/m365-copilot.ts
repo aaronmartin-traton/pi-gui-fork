@@ -244,6 +244,26 @@ async function findPython(platform: NodeJS.Platform): Promise<PythonCommand | nu
       ? [
           { command: "py", prefixArgs: ["-3.14"] },
           { command: "py", prefixArgs: ["-3"] },
+          // The Microsoft Store `python.exe` stub shadows the real interpreter on PATH,
+          // so also try the well-known install locations directly.
+          {
+            command: join(
+              process.env["ProgramFiles"] ?? "C:\\Program Files",
+              "Python314",
+              "python.exe",
+            ),
+            prefixArgs: [],
+          },
+          {
+            command: join(
+              process.env["LOCALAPPDATA"] ?? "",
+              "Programs",
+              "Python",
+              "Python314",
+              "python.exe",
+            ),
+            prefixArgs: [],
+          },
           { command: "python", prefixArgs: [] },
           { command: "python3", prefixArgs: [] },
         ]
