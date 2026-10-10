@@ -1,5 +1,6 @@
 import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
 import type { M365CopilotStatus } from "../../contracts/ipc";
 import {
   M365_COPILOT_CONTEXT_WINDOW,
@@ -9,9 +10,11 @@ import {
 
 /**
  * Starts and watches the bundled Microsoft 365 Copilot proxy
- * (resources/m365-copilot-proxy, Python standard library only). The proxy opens a
- * dedicated Edge window for sign-in, captures the Copilot web token, and serves an
- * OpenAI-compatible API on 127.0.0.1 that pi uses as the `m365-copilot` provider.
+ * (resources/m365-copilot-proxy, the `m365copilotproxy` Python package). The proxy
+ * opens a dedicated Edge/Chrome window for sign-in, captures the Copilot web token,
+ * and serves an OpenAI-compatible API on 127.0.0.1 that pi uses as the `m365-copilot`
+ * provider. It also routes fenced ```bash / ```powershell blocks to the harness's
+ * shell tool, so M365 can drive real tool loops.
  *
  * A proxy the person already runs on the same URL is detected and used as is.
  */
@@ -20,9 +23,9 @@ const DEFAULT_PORT = 8000;
 const LOG_LINES = 40;
 
 export interface M365CopilotConnectorOptions {
-  /** Folder that contains the `m365_copilot_openai_proxy` package. */
+  /** Folder that contains the `m365copilotproxy` package. */
   readonly proxyDir: string;
-  /** Writable folder for the proxy's `.env` token file. */
+  /** Writable folder for the proxy's MSAL token cache. */
   readonly dataDir: string;
   readonly platform: NodeJS.Platform;
   /** Overrides the proxy URL, e.g. for a proxy run by hand on another port. */
@@ -80,7 +83,7 @@ export class M365CopilotConnector {
         ...base,
         state: "python-missing",
         detail:
-          "The Copilot connection needs Python 3.11 or newer. Click Get Python (a free Microsoft Store install, no admin rights needed), then click Connect again.",
+          "The Copilot connection needs Python 3.14 or newer. Click Get Python (a free Microsoft Store install, no admin rights needed), then click Connect again.",
       };
     }
     if (this.lastError) {
@@ -111,15 +114,16 @@ export class M365CopilotConnector {
     const port = portFromBaseUrl(this.baseUrl);
     const child = spawn(
       this.python.command,
-      [...this.python.prefixArgs, "-m", "m365_copilot_openai_proxy", "serve", "--port", port],
+      [...this.python.prefixArgs, "-m", "m365copilotproxy", "serve", "--port", port],
       {
-        // The proxy keeps its captured token in `.env` in its working directory.
+        // The proxy keeps its MSAL token cache under dataDir.
         cwd: this.options.dataDir,
         env: {
           ...process.env,
           PYTHONPATH: this.options.proxyDir,
           PYTHONUNBUFFERED: "1",
           PYTHONDONTWRITEBYTECODE: "1",
+          M365_CACHE_FILE: join(this.options.dataDir, "msal-cache.json"),
           M365_TIME_ZONE:
             process.env.M365_TIME_ZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
@@ -211,16 +215,18 @@ function portFromBaseUrl(baseUrl: string): string {
   }
 }
 
-/** Finds a Python 3.11+ interpreter: the `py` launcher first on Windows, then python/python3. */
+/** Finds a Python 3.14+ interpreter: the `py` launcher first on Windows, then python/python3. */
 async function findPython(platform: NodeJS.Platform): Promise<PythonCommand | null> {
   const candidates: PythonCommand[] =
     platform === "win32"
       ? [
+          { command: "py", prefixArgs: ["-3.14"] },
           { command: "py", prefixArgs: ["-3"] },
           { command: "python", prefixArgs: [] },
           { command: "python3", prefixArgs: [] },
         ]
       : [
+          { command: "python3.14", prefixArgs: [] },
           { command: "python3", prefixArgs: [] },
           { command: "python", prefixArgs: [] },
         ];
@@ -236,7 +242,7 @@ function isSupportedPython(candidate: PythonCommand): Promise<boolean> {
   return new Promise((resolve) => {
     execFile(
       candidate.command,
-      [...candidate.prefixArgs, "-c", "import sys; print(int(sys.version_info >= (3, 11)))"],
+      [...candidate.prefixArgs, "-c", "import sys; print(int(sys.version_info >= (3, 14)))"],
       { timeout: 5000, windowsHide: true },
       (error, stdout) => resolve(!error && stdout.trim() === "1"),
     );

@@ -1,13 +1,29 @@
-# Vendored: m365-copilot-openai-proxy
+# Vendored: m365copilotproxy
 
-This folder is an unmodified copy of the `m365_copilot_openai_proxy` package from
-<https://github.com/NicolaiLassen/m365-copilot-openai-proxy> at commit
-`35fbe938f50fc154880f0a5f146355c0ca24896b`, itself a standard-library-only port of
-<https://github.com/kuchris/m365-copilot-openai-proxy>.
+This folder contains `m365copilotproxy`, the Python port of the Microsoft 365
+Copilot OpenAI-compatible proxy from
+<https://github.com/aaronmartin-traton/m365-copilot-proxy> (`packages/python-proxy`),
+itself a fork of <https://github.com/cramt/m365-copilot-proxy>.
 
-It is licensed under the Apache License 2.0 (see `LICENSE` in this folder), separately
-from the MIT-licensed desktop app around it.
+It differs from the earlier vendored `m365_copilot_openai_proxy` in one way that
+matters: it emits and parses **fenced tool calls** and routes them to the
+harness's shell tool, so M365 Copilot can drive real tool loops. It also frames
+the **Windows** shell (`powershell`/`pwsh`/`cmd`), not just POSIX.
 
-pi-gui starts it as a local child process (`python -m m365_copilot_openai_proxy serve`)
-so Microsoft 365 Copilot can be used as a pi model. It is unofficial and talks to the
-same browser-facing API as the M365 Copilot web app, so it can break without notice.
+pi-gui starts it as a local child process
+(`python -m m365copilotproxy serve --port <port>`) so Microsoft 365 Copilot can
+be used as a pi model. It is unofficial and talks to the same browser-facing API
+as the M365 Copilot web app, so it can break without notice. `LICENSE` in this
+folder is the upstream license; the desktop app around it stays MIT.
+
+Runtime dependencies (`requirements.txt`: `msal`, `websockets`, `cryptography`)
+install into `%LOCALAPPDATA%\M365CopilotProxy\Python314\site-packages` via
+`install-deps.ps1`. Python 3.14 or newer is required.
+
+Licensed **MIT**, inherited from
+<https://github.com/cramt/m365-copilot-proxy> (Copyright 2026 Alexandra
+Østermark) — the same license as the desktop app around it.
+
+Local change from upstream: `tooling.py` `SHELL_NAME` now matches
+`powershell`/`pwsh`/`ps1`/`posh` so Windows shell routing works; `e2e.py` gained
+a regression case for it.
