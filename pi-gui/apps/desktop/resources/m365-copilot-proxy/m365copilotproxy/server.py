@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from . import agent as agent_module
 from .auth import AuthenticationError, CHAT_SCOPES, TokenProvider
+from .images import images_from_messages, prepare_image_attachments
 from .catalog import METERED_BUDGETS, default_framing, models_response, routing_for_model, tone_for_model, uses_agent
 from .m365 import TurnResult, send_turn
 from .tooling import content_text, find_shell_tool, format_delta, format_messages, parse_tool_calls
@@ -273,11 +274,19 @@ class ProxyApplication:
                     prompt = "Please continue."
             token = self._token()
             agent_id = self._agent(model, has_tools)
+            new_messages = messages if state.sent_count == 0 else messages[state.sent_count:]
+            try:
+                images = images_from_messages(new_messages)
+                annotations = prepare_image_attachments(token, state.conversation_id, images)
+            except ValueError as error:
+                raise ApiError(400, str(error), "invalid_request_error") from None
+            except RuntimeError as error:
+                raise ApiError(502, str(error), "m365_image_upload_failed") from None
             stream_delta = on_delta if body.get("stream") and not has_tools and not requested_budget else None
             result = asyncio.run(send_turn(
                 token, prompt, model, state.conversation_id, state.session_id, agent_id,
                 state.turn_count == 0, stream_delta, tool_turn=has_tools,
-                intercept_hosted_shell=intercept_hosted_shell,
+                intercept_hosted_shell=intercept_hosted_shell, annotations=annotations,
             ))
             tone = tone_for_model(model)
             if agent_id and (result.result or {}).get("value") == "InternalError" and not result.text \
@@ -289,7 +298,7 @@ class ProxyApplication:
                 prompt = format_messages(messages, tools, body.get("tool_choice"), state.conversation_id, variant)
                 result = asyncio.run(send_turn(
                     token, prompt, model, state.conversation_id, state.session_id, None, True, stream_delta,
-                    tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell,
+                    tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell, annotations=annotations,
                 ))
             if result.error_code == "M365TransportError":
                 raise ApiError(502, result.error or "M365 transport failed", "m365_transport_error")
@@ -308,7 +317,7 @@ class ProxyApplication:
                     prompt = format_messages(messages, tools, body.get("tool_choice"), state.conversation_id, variant)
                     result = asyncio.run(send_turn(
                         token, prompt, model, state.conversation_id, state.session_id, agent_id, True, stream_delta,
-                        tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell,
+                        tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell, annotations=annotations,
                     ))
                     if result.error_code == "M365TransportError":
                         raise ApiError(502, result.error or "M365 transport failed", "m365_transport_error")

@@ -24,6 +24,8 @@ Licensed **MIT**, inherited from
 <https://github.com/cramt/m365-copilot-proxy> (Copyright 2026 Alexandra
 Østermark) — the same license as the desktop app around it.
 
-Local change from upstream: `tooling.py` `SHELL_NAME` now matches
-`powershell`/`pwsh`/`ps1`/`posh` so Windows shell routing works; `e2e.py` gained
-a regression case for it.
+Local changes from upstream: `tooling.py` `SHELL_NAME` now matches
+`powershell`/`pwsh`/`ps1`/`posh` so Windows shell routing works; `images.py`
+adds image input (upload to the substrate `UploadFile` endpoint + a
+`messageAnnotations` reference on the chat turn); `e2e.py` gained regression
+cases for both.

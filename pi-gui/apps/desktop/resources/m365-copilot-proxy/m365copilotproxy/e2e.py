@@ -7,7 +7,9 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, urlsplit
 from urllib.request import Request, urlopen
@@ -17,6 +19,28 @@ import websockets
 RS = "\x1e"
 RECORDS: list[dict] = []
 DISENGAGED_SEEN: set[str] = set()
+UPLOAD_RECORDS: list[dict] = []
+
+
+class _UploadHandler(BaseHTTPRequestHandler):
+    """Fixture for the substrate UploadFile endpoint."""
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8", "replace")
+        UPLOAD_RECORDS.append({"path": self.path, "headers": {k.lower(): v for k, v in self.headers.items()}, "body": body})
+        payload = json.dumps({
+            "result": {"value": "Success"}, "docId": "doc-fixture-1",
+            "fileName": "image-1.png", "fileType": "png",
+        }).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def log_message(self, *args) -> None:
+        pass
 
 
 def _port() -> int:
@@ -65,6 +89,7 @@ async def _fake_m365(connection) -> None:
             "scenario": query.get("scenario", [""])[0],
             "agent_id": agent_id,
             "options_sets": args.get("optionsSets"),
+            "message_annotations": (args.get("message") or {}).get("messageAnnotations"),
         })
         marker = "disengage-retry" if "disengage-retry" in prompt else None
         disengaged = marker is not None and marker not in DISENGAGED_SEEN
@@ -173,6 +198,11 @@ async def _run() -> None:
     env.pop("M365_FORCE_AGENT", None)
     RECORDS.clear()
     DISENGAGED_SEEN.clear()
+    UPLOAD_RECORDS.clear()
+    upload_port = _port()
+    upload_server = ThreadingHTTPServer(("127.0.0.1", upload_port), _UploadHandler)
+    threading.Thread(target=upload_server.serve_forever, daemon=True).start()
+    env["M365_UPLOAD_URL"] = f"http://127.0.0.1:{upload_port}/m365Copilot/UploadFile"
     async with websockets.serve(_fake_m365, "127.0.0.1", ws_port, max_size=4 * 1024 * 1024):
         process = subprocess.Popen([sys.executable, "-m", "m365copilotproxy", "--port", str(api_port)],
                                    env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -216,6 +246,37 @@ async def _run() -> None:
             ps_call = json.loads(raw)["choices"][0]["message"]["tool_calls"][0]
             assert ps_call["function"]["name"] == "powershell", ps_call
             assert json.loads(ps_call["function"]["arguments"]) == {"command": "Get-ChildItem"}
+
+            image_data_url = "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\x00" * 24).decode()
+            status, _, raw = await _request("POST", base + "/v1/chat/completions", {
+                "model": "m365-copilot",
+                "messages": [{"role": "user", "content": [
+                    {"type": "text", "text": "what is in this image?"},
+                    {"type": "image_url", "image_url": {"url": image_data_url}},
+                ]}],
+            }, {"X-M365-Conversation-ID": "e2e-image"})
+            assert status == 200, raw
+            image_record = RECORDS[-1]
+            annotations = image_record["message_annotations"]
+            assert annotations, image_record
+            assert annotations[0]["messageAnnotationType"] == "ImageFile", annotations
+            assert annotations[0]["id"] == "doc-fixture-1", annotations
+            assert annotations[0]["messageAnnotationMetadata"]["fileType"] == "png", annotations
+            assert "cwc_fileupload_odb" in image_record["options_sets"], image_record["options_sets"]
+            assert UPLOAD_RECORDS, "no upload request reached the fixture"
+            upload = UPLOAD_RECORDS[-1]
+            assert "UploadImage" in upload["body"], upload["body"][:200]
+            assert "FileBase64" in upload["body"], upload["body"][:200]
+            assert upload["headers"].get("x-anchormailbox", "").startswith("Oid:"), upload["headers"]
+
+            status, _, raw = await _request("POST", base + "/v1/chat/completions", {
+                "model": "m365-copilot",
+                "messages": [{"role": "user", "content": [
+                    {"type": "image_url", "image_url": {"url": "data:image/tiff;base64,AAAA"}},
+                ]}],
+            })
+            assert status == 400, raw
+            assert "unsupported image type" in json.loads(raw)["error"]["message"], raw
 
             status, _, raw = await _request("POST", base + "/v1/chat/completions", {
                 "model": "gpt-6-think-deeper",
@@ -388,7 +449,7 @@ async def _run() -> None:
             assert status == 429, raw
             assert len(RECORDS) == count_after_exhaustion, "exhausted budget must not start another M365 turn"
 
-            print("E2E PASS: models, hosted-shell routing, Chat/Responses tool loops, reuse/SSE, retries, priority fallback/exhaustion")
+            print("E2E PASS: models, hosted-shell routing, image upload, Chat/Responses tool loops, reuse/SSE, retries, priority fallback/exhaustion")
         finally:
             process.terminate()
             try:

@@ -41,6 +41,13 @@ ALLOWED_MESSAGE_TYPES = [
     "RenderCardRequest", "SemanticSerp", "GenerateContentQuery", "SearchQuery", "ConfirmationCard",
     "DeveloperLogs", "EndOfRequest", "ReferencesListComplete", "GeneratedCode",
 ]
+# Sent with an image upload and on the chat turn that carries the attachment.
+UPLOAD_OPTIONS_SETS = [
+    "cwcgptvsan",
+    "flux_v3_gptv_enable_upload_multi_image_in_turn_wo_ch",
+    "gptvnorm2048",
+]
+IMAGE_CHAT_OPTIONS_SETS = UPLOAD_OPTIONS_SETS + ["cwc_fileupload_odb"]
 
 
 @dataclass
@@ -94,9 +101,11 @@ def _query(token: str, oid: str, tid: str, conversation_id: str, session_id: str
 
 def _chat_args(text: str, model: str, session_id: str,
                request_id: str, agent_id: str | None, is_start: bool,
-               tool_turn: bool = False) -> dict:
+               tool_turn: bool = False, annotations: list[dict] | None = None) -> dict:
     tone = tone_for_model(model)
     options = [] if agent_id or tool_turn or os.environ.get("M365_NO_CODE_INTERPRETER") == "1" else CODE_INTERPRETER_OPTIONS
+    if annotations:
+        options = options + IMAGE_CHAT_OPTIONS_SETS
     args = {
         "source": "officeweb", "clientCorrelationId": request_id, "sessionId": session_id,
         "optionsSets": options, "streamingMode": "ConciseWithPadding", "spokenTextMode": "None",
@@ -114,6 +123,7 @@ def _chat_args(text: str, model: str, session_id: str,
             ], "requestId": request_id, "locationInfo": {"timeZoneOffset": 1, "timeZone": "Europe/Copenhagen"},
             "locale": "en-gb", "messageType": "Chat", "experienceType": "Default",
             "adaptiveCards": [], "clientPreferences": {},
+            **({"messageAnnotations": annotations, "connectedFederatedConnections": ["dummyId"]} if annotations else {}),
         },
         "plugins": [] if agent_id else [{"Id": "BingWebSearch", "Source": "BuiltIn"}],
         "isSbsSupported": True, "tone": tone, "renderReferencesBehindEOS": True,
@@ -183,7 +193,7 @@ def _fold(current: str, next_text: str) -> str:
 
 async def send_turn(token: str, prompt: str, model: str, conversation_id: str, session_id: str,
                     agent_id: str | None, is_start: bool, on_delta=None, tool_turn: bool = False,
-                    intercept_hosted_shell: bool = False) -> TurnResult:
+                    intercept_hosted_shell: bool = False, annotations: list[dict] | None = None) -> TurnResult:
     oid, tid = token_claims(token)
     request_id = str(uuid.uuid4())
     uri = _query(token, oid, tid, conversation_id, session_id, request_id, model, agent_id)
@@ -208,7 +218,7 @@ async def send_turn(token: str, prompt: str, model: str, conversation_id: str, s
                     break
             if not handshake_ok:
                 raise RuntimeError("SignalR handshake ended before acknowledgement")
-            chat = {"arguments": [_chat_args(prompt, model, session_id, request_id, agent_id, is_start, tool_turn)],
+            chat = {"arguments": [_chat_args(prompt, model, session_id, request_id, agent_id, is_start, tool_turn, annotations)],
                     "invocationId": "0", "target": "chat", "type": 4}
             now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             metrics = {"arguments": [{"Timestamps": {"ConnectionStart": now, "UserInputStart": now,
