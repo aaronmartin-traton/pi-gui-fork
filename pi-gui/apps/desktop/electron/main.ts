@@ -20,6 +20,7 @@ import {
 } from "./assistant/coworker-extensions";
 import { createHandoffExtension } from "./assistant/handoff";
 import { createWebSearchExtension } from "./assistant/web-search";
+import { createWindowsShellExtension } from "./assistant/windows-shell";
 import { M365CopilotConnector } from "./platform/m365-copilot";
 import { isValidHttpBaseUrl } from "@pi-gui/pi-sdk-driver";
 import { createRequire } from "node:module";
@@ -1054,6 +1055,12 @@ app
           displayName: "Handoff",
           description: "Continue this thread in a new thread with /handoff",
           factory: createHandoffExtension(orchestrationRuntimeBridge),
+        },
+        {
+          name: "pi-gui-windows-shell",
+          displayName: "PowerShell on Windows",
+          description: "Adds pi's PowerShell tool so commands run on Windows",
+          factory: createWindowsShellExtension(),
         },
         {
           name: "pi-gui-context-trim",
