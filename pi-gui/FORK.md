@@ -13,14 +13,13 @@ people who are not technical.
 
 ## For coworkers
 
-1. Install the app (the `pi-gui-Setup-*.exe` someone shares with you).
-2. If you have never installed Python: run `scripts\setup-windows.ps1` once, or click
-   **Get Python** in the app when it asks (a free Microsoft Store install, no admin rights).
-3. Open the app, pick a folder, and click **Connect Microsoft 365 Copilot** on the banner
+1. Install the app (the `pi-gui-Setup-*.exe` someone shares with you). It carries its own
+   Python, so there is nothing else to install — no Python, no `pip`, no admin rights.
+2. Open the app, pick a folder, and click **Connect Microsoft 365 Copilot** on the banner
    (or Settings → Microsoft 365 Copilot → **Connect**).
-4. An Edge window opens. Sign in with your normal work account. The status turns
+3. An Edge window opens. Sign in with your normal work account. The status turns
    **Connected** and new threads use Copilot.
-5. Start from one of the suggestions under the message box, or just ask.
+4. Start from one of the suggestions under the message box, or just ask.
 
 pi asks before it edits a file or runs a command (**Ask before changes**). Turn that off in
 Settings → Skills and extensions if you prefer.
@@ -29,14 +28,17 @@ Settings → Skills and extensions if you prefer.
 
 ### Microsoft 365 Copilot, built in
 
-- The stdlib-only [m365-copilot-openai-proxy](https://github.com/NicolaiLassen/m365-copilot-openai-proxy)
-  (Apache-2.0) ships inside the app as `resources/m365-copilot-proxy` (see its `NOTICE.md`).
-  It needs no Azure app registration or admin consent: it signs in through a dedicated Edge
-  profile, the same way the Copilot web app does.
-- `electron/platform/m365-copilot.ts` finds Python 3.11+ (`py -3` first on Windows), starts the
-  proxy with its token file under the app's userData folder, health-checks `/healthz`, shows
-  plain-language states (starting, waiting for sign-in, connected, Python/Edge missing, port
-  busy), and stops it on quit. A proxy you already run is detected and reused.
+- The proxy (`resources/m365-copilot-proxy`, the `m365copilotproxy` package) ships inside the
+  app and is **stdlib-only** — no `pip`, no third-party packages (see its `NOTICE.md`). It needs
+  no Azure app registration or admin consent: it signs in through a dedicated Edge profile, the
+  same way the Copilot web app does.
+- The installer also carries its own CPython (`resources/python`, fetched by
+  `scripts/fetch-python-runtime.mjs` at package time), so nothing has to be installed on the
+  host. A system Python 3.12+ is only a dev fallback.
+- `electron/platform/m365-copilot.ts` starts the proxy with the bundled interpreter, keeps its
+  token file under the app's userData folder, health-checks `/healthz`, shows plain-language
+  states (starting, waiting for sign-in, connected, runtime missing, port busy), and stops it
+  on quit. A proxy you already run is detected and reused.
 - On **Connect**, the settings page registers pi provider `m365-copilot` (OpenAI-compatible,
   32K context so pi compacts early) and makes it the default model.
 - `PI_GUI_M365_PROXY_URL` points the app at a different proxy, for example

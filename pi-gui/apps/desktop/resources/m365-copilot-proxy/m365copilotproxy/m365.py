@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
+import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from urllib.parse import urlencode
 
-import websockets
-
 from .catalog import routing_for_model, tone_for_model
+from .wsclient import WebSocket
 
 RS = "\x1e"
 WS_ENDPOINT = "wss://substrate.office.com/m365Copilot/Chathub"
@@ -191,23 +190,25 @@ def _fold(current: str, next_text: str) -> str:
     return current + next_text
 
 
-async def send_turn(token: str, prompt: str, model: str, conversation_id: str, session_id: str,
-                    agent_id: str | None, is_start: bool, on_delta=None, tool_turn: bool = False,
-                    intercept_hosted_shell: bool = False, annotations: list[dict] | None = None) -> TurnResult:
+def send_turn(token: str, prompt: str, model: str, conversation_id: str, session_id: str,
+              agent_id: str | None, is_start: bool, on_delta=None, tool_turn: bool = False,
+              intercept_hosted_shell: bool = False, annotations: list[dict] | None = None) -> TurnResult:
     oid, tid = token_claims(token)
     request_id = str(uuid.uuid4())
     uri = _query(token, oid, tid, conversation_id, session_id, request_id, model, agent_id)
-    headers = {"Accept-Language": "en-GB,en;q=0.9", "Cache-Control": "no-cache", "Pragma": "no-cache"}
+    headers = {
+        "Origin": "https://m365.cloud.microsoft",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
+        "Accept-Language": "en-GB,en;q=0.9",
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
     result = TurnResult()
     try:
-        async with websockets.connect(
-            uri, origin="https://m365.cloud.microsoft",
-            user_agent_header="Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:148.0) Gecko/20100101 Firefox/148.0",
-            additional_headers=headers, open_timeout=30, close_timeout=5, max_size=4 * 1024 * 1024,
-        ) as ws:
-            await ws.send(json.dumps({"protocol": "json", "version": 1}) + RS)
+        with WebSocket.connect(uri, headers=headers, timeout=30) as ws:
+            ws.send(json.dumps({"protocol": "json", "version": 1}) + RS)
             handshake_ok = False
-            async for frame in ws:
+            for frame in ws:
                 for msg in _parse_frames(frame):
                     if isinstance(msg, dict) and msg.get("error"):
                         raise RuntimeError(f"SignalR handshake failed: {msg['error']}")
@@ -223,16 +224,16 @@ async def send_turn(token: str, prompt: str, model: str, conversation_id: str, s
             now = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
             metrics = {"arguments": [{"Timestamps": {"ConnectionStart": now, "UserInputStart": now,
                         "ConnectionEstablished": now, "UserInputSubmit": now}}], "target": "Metrics", "type": 1}
-            await ws.send(json.dumps(chat, separators=(",", ":")) + RS + json.dumps(metrics, separators=(",", ":")) + RS)
+            ws.send(json.dumps(chat, separators=(",", ":")) + RS + json.dumps(metrics, separators=(",", ":")) + RS)
             current_text = ""
             intercepted = False
-            async for frame in ws:
+            for frame in ws:
                 for msg in _parse_frames(frame):
                     if not isinstance(msg, dict):
                         continue
                     frame_type = msg.get("type")
                     if frame_type == 6:
-                        await ws.send(json.dumps({"type": 6}) + RS)
+                        ws.send(json.dumps({"type": 6}) + RS)
                     elif frame_type == 7:
                         if msg.get("error"):
                             result.error = str(msg["error"])
@@ -246,8 +247,8 @@ async def send_turn(token: str, prompt: str, model: str, conversation_id: str, s
                                 command = _hosted_shell_command(arg["messages"]) if intercept_hosted_shell and not agent_id else None
                                 if command:
                                     result.text = f"```bash\n{command}\n```"
-                                    await ws.send(STOP_FRAME)
-                                    await asyncio.sleep(0.5)
+                                    ws.send(STOP_FRAME)
+                                    time.sleep(0.5)
                                     intercepted = True
                                     break
                                 snapshot, message_type, turn_count = _text_from_messages(arg["messages"])

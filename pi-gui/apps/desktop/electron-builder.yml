@@ -32,6 +32,12 @@ extraResources:
     filter:
       - "**/*"
       - "!**/__pycache__/**"
+  # Bundled CPython (Windows only), so the app needs no Python on the host.
+  # Populate with: node scripts/fetch-python-runtime.mjs --platform win32
+  - from: resources/python
+    to: python
+    filter:
+      - "**/*"
 
 asar: true
 asarUnpack:

@@ -1665,6 +1665,9 @@ function getM365CopilotConnector(): M365CopilotConnector {
     proxyDir: app.isPackaged
       ? path.join(process.resourcesPath, "m365-copilot-proxy")
       : path.join(__dirname, "..", "..", "resources", "m365-copilot-proxy"),
+    runtimeDir: app.isPackaged
+      ? path.join(process.resourcesPath, "python")
+      : path.join(__dirname, "..", "..", "resources", "python"),
     dataDir: path.join(configuredUserDataDir, "m365-copilot"),
     platform: process.platform,
     ...(process.env.PI_GUI_M365_PROXY_URL?.trim()

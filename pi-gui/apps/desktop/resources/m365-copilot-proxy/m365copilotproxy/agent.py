@@ -5,8 +5,8 @@ import json
 import os
 import sys
 from pathlib import Path
-
-import requests
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from .auth import BAP_SCOPES, POWERPLATFORM_SCOPES, TokenProvider
 
@@ -37,9 +37,29 @@ def _request(method: str, url: str, token: str, **kwargs):
         "Authorization": f"Bearer {token}",
         "x-ms-user-agent": "PVA-Portal/1.0.0 (Web; ReactNative: false)",
     }
-    response = requests.request(method, url, headers=headers, timeout=30, **kwargs)
-    response.raise_for_status()
-    return response
+    data = None
+    json_body = kwargs.pop("json", None)
+    if json_body is not None:
+        data = json.dumps(json_body).encode("utf-8")
+    timeout = kwargs.pop("timeout", 30)
+    if kwargs:
+        raise TypeError(f"Unexpected keyword arguments: {list(kwargs)}")
+    resp = urlopen(Request(url, data=data, headers=headers, method=method), timeout=timeout)
+    return _Response(resp)
+
+
+class _Response:
+    """Minimal response wrapper exposing .json() as callers require."""
+    __slots__ = ("_resp", "_body")
+
+    def __init__(self, resp) -> None:
+        self._resp = resp
+        self._body = None
+
+    def json(self):
+        if self._body is None:
+            self._body = json.loads(self._resp.read())
+        return self._body
 
 
 def _create_body() -> dict:

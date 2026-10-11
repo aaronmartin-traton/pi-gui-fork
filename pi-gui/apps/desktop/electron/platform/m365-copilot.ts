@@ -10,11 +10,15 @@ import {
 
 /**
  * Starts and watches the bundled Microsoft 365 Copilot proxy
- * (resources/m365-copilot-proxy, the `m365copilotproxy` Python package). The proxy
- * opens a dedicated Edge/Chrome window for sign-in, captures the Copilot web token,
- * and serves an OpenAI-compatible API on 127.0.0.1 that pi uses as the `m365-copilot`
- * provider. It also routes fenced ```bash / ```powershell blocks to the harness's
- * shell tool, so M365 can drive real tool loops.
+ * (resources/m365-copilot-proxy, the `m365copilotproxy` Python package, which is
+ * stdlib-only). The proxy opens a dedicated Edge/Chrome window for sign-in,
+ * captures the Copilot web token, and serves an OpenAI-compatible API on
+ * 127.0.0.1 that pi uses as the `m365-copilot` provider. It also routes fenced
+ * ```bash / ```powershell blocks to the harness's shell tool, so M365 can drive
+ * real tool loops.
+ *
+ * The packaged app carries its own CPython (resources/python), so nothing has to
+ * be installed on the host; a host interpreter is only a dev fallback.
  *
  * A proxy the person already runs on the same URL is detected and used as is.
  */
@@ -25,7 +29,9 @@ const LOG_LINES = 40;
 export interface M365CopilotConnectorOptions {
   /** Folder that contains the `m365copilotproxy` package. */
   readonly proxyDir: string;
-  /** Writable folder for the proxy's MSAL token cache. */
+  /** Folder holding the CPython runtime the app ships, when it ships one. */
+  readonly runtimeDir?: string;
+  /** Writable folder for the proxy's token cache. */
   readonly dataDir: string;
   readonly platform: NodeJS.Platform;
   /** Overrides the proxy URL, e.g. for a proxy run by hand on another port. */
@@ -85,7 +91,7 @@ export class M365CopilotConnector {
         ...base,
         state: "python-missing",
         detail:
-          "The Copilot connection needs Python 3.12 or newer. Click Get Python (a free Microsoft Store install, no admin rights needed), then click Connect again.",
+          "This build did not include the Copilot runtime. Reinstall the app, or install Python 3.12 or newer and click Connect again.",
       };
     }
     if (this.lastError) {
@@ -109,7 +115,7 @@ export class M365CopilotConnector {
     }
     this.lastError = undefined;
     const generation = this.generation;
-    this.python = await findPython(this.options.platform);
+    this.python = await findPython(this.options.platform, this.options.runtimeDir);
     if (!this.python || generation !== this.generation) {
       return this.status();
     }
@@ -122,14 +128,14 @@ export class M365CopilotConnector {
       this.python.command,
       [...this.python.prefixArgs, "-m", "m365copilotproxy", "serve", "--port", port],
       {
-        // The proxy keeps its MSAL token cache under dataDir.
+        // The proxy keeps its token cache under dataDir.
         cwd: this.options.dataDir,
         env: {
           ...process.env,
           PYTHONPATH: this.options.proxyDir,
           PYTHONUNBUFFERED: "1",
           PYTHONDONTWRITEBYTECODE: "1",
-          M365_CACHE_FILE: join(this.options.dataDir, "msal-cache.json"),
+          M365_CACHE_FILE: join(this.options.dataDir, "token-cache.json"),
           M365_TIME_ZONE:
             process.env.M365_TIME_ZONE ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
         },
@@ -237,39 +243,41 @@ function portFromBaseUrl(baseUrl: string): string {
   }
 }
 
-/** Finds a Python 3.12+ interpreter: the `py` launcher first on Windows, then python/python3. */
-async function findPython(platform: NodeJS.Platform): Promise<PythonCommand | null> {
-  const candidates: PythonCommand[] =
-    platform === "win32"
-      ? [
-          { command: "py", prefixArgs: ["-3"] },
-          // The Microsoft Store `python.exe` stub shadows the real interpreter on PATH,
-          // so also try the well-known install locations directly.
-          {
-            command: join(
-              process.env["ProgramFiles"] ?? "C:\\Program Files",
-              "Python314",
-              "python.exe",
-            ),
-            prefixArgs: [],
-          },
-          {
-            command: join(
-              process.env["LOCALAPPDATA"] ?? "",
-              "Programs",
-              "Python",
-              "Python314",
-              "python.exe",
-            ),
-            prefixArgs: [],
-          },
-          { command: "python", prefixArgs: [] },
-          { command: "python3", prefixArgs: [] },
-        ]
-      : [
-          { command: "python3", prefixArgs: [] },
-          { command: "python", prefixArgs: [] },
-        ];
+/** Finds a Python 3.12+ interpreter: the bundled runtime first, then the host. */
+async function findPython(
+  platform: NodeJS.Platform,
+  runtimeDir: string | undefined,
+): Promise<PythonCommand | null> {
+  const bundled: PythonCommand[] =
+    runtimeDir && platform === "win32"
+      ? [{ command: join(runtimeDir, "python.exe"), prefixArgs: [] }]
+      : [];
+  // The Microsoft Store `python.exe` stub shadows the real interpreter on PATH,
+  // so also try the well-known install locations directly.
+  const windows: PythonCommand[] = [
+    { command: "py", prefixArgs: ["-3"] },
+    {
+      command: join(process.env["ProgramFiles"] ?? "C:\\Program Files", "Python314", "python.exe"),
+      prefixArgs: [],
+    },
+    {
+      command: join(
+        process.env["LOCALAPPDATA"] ?? "",
+        "Programs",
+        "Python",
+        "Python314",
+        "python.exe",
+      ),
+      prefixArgs: [],
+    },
+    { command: "python", prefixArgs: [] },
+    { command: "python3", prefixArgs: [] },
+  ];
+  const posix: PythonCommand[] = [
+    { command: "python3", prefixArgs: [] },
+    { command: "python", prefixArgs: [] },
+  ];
+  const candidates = [...bundled, ...(platform === "win32" ? windows : posix)];
   for (const candidate of candidates) {
     if (await isSupportedPython(candidate)) {
       return candidate;

@@ -16,10 +16,13 @@ be used as a pi model. It is unofficial and talks to the same browser-facing API
 as the M365 Copilot web app, so it can break without notice. `LICENSE` in this
 folder is the upstream license; the desktop app around it stays MIT.
 
-Runtime dependencies (`requirements.txt`: `msal`, `websockets`, `cryptography`)
-install into `%LOCALAPPDATA%\M365CopilotProxy\Python314\site-packages` via
-`install-deps.ps1`. Python **3.12 or newer** is required (3.10/3.11 fail on
-PEP 701 nested-quote f-strings; 3.12–3.14 pass the e2e).
+**No third-party dependencies.** The package is **stdlib-only** — it uses its own
+RFC 6455 WebSocket client (`wsclient.py`) and its own OAuth 2.0 authorization-code
+flow (`auth.py`, PKCE + the token endpoint over `urllib`), so there is no `msal`,
+`websockets`, `cryptography`, or `requests`, and no `pip install` step. Python
+**3.12 or newer** is required (3.10/3.11 fail on PEP 701 nested-quote f-strings;
+3.12–3.14 pass the e2e). The packaged app carries its own CPython, so the host
+needs nothing.
 
 Licensed **MIT**, inherited from
 <https://github.com/cramt/m365-copilot-proxy> (Copyright 2026 Alexandra

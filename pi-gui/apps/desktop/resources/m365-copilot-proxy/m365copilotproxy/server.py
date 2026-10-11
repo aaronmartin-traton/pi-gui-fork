@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import json
 import os
 import re
@@ -283,11 +282,11 @@ class ProxyApplication:
             except RuntimeError as error:
                 raise ApiError(502, str(error), "m365_image_upload_failed") from None
             stream_delta = on_delta if body.get("stream") and not has_tools and not requested_budget else None
-            result = asyncio.run(send_turn(
+            result = send_turn(
                 token, prompt, model, state.conversation_id, state.session_id, agent_id,
                 state.turn_count == 0, stream_delta, tool_turn=has_tools,
                 intercept_hosted_shell=intercept_hosted_shell, annotations=annotations,
-            ))
+            )
             tone = tone_for_model(model)
             if agent_id and (result.result or {}).get("value") == "InternalError" and not result.text \
                     and tone in {"Gpt_6_Sol_Reasoning", "Gpt_61_Sol_Reasoning"} \
@@ -296,10 +295,10 @@ class ProxyApplication:
                 state.reset()
                 variant = os.environ.get("M365_FRAMING_VARIANT") or default_framing(model)
                 prompt = format_messages(messages, tools, body.get("tool_choice"), state.conversation_id, variant)
-                result = asyncio.run(send_turn(
+                result = send_turn(
                     token, prompt, model, state.conversation_id, state.session_id, None, True, stream_delta,
                     tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell, annotations=annotations,
-                ))
+                )
             if result.error_code == "M365TransportError":
                 raise ApiError(502, result.error or "M365 transport failed", "m365_transport_error")
             self._remember_metering(result, model)
@@ -315,10 +314,10 @@ class ProxyApplication:
                     if variant not in {"baseline", "relay", "relay_batch"}:
                         variant = default_framing(model)
                     prompt = format_messages(messages, tools, body.get("tool_choice"), state.conversation_id, variant)
-                    result = asyncio.run(send_turn(
+                    result = send_turn(
                         token, prompt, model, state.conversation_id, state.session_id, agent_id, True, stream_delta,
                         tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell, annotations=annotations,
-                    ))
+                    )
                     if result.error_code == "M365TransportError":
                         raise ApiError(502, result.error or "M365 transport failed", "m365_transport_error")
                     self._remember_metering(result, model)
@@ -335,10 +334,10 @@ class ProxyApplication:
                 if variant == "baseline":
                     variant = "relay"
                 prompt = format_messages(messages, tools, body.get("tool_choice"), state.conversation_id, variant)
-                result = asyncio.run(send_turn(
+                result = send_turn(
                     token, prompt, model, state.conversation_id, state.session_id, agent_id, True, stream_delta,
                     tool_turn=has_tools, intercept_hosted_shell=intercept_hosted_shell,
-                ))
+                )
                 if result.message_type == "Disengaged":
                     raise ApiError(502, "M365 returned a Disengaged response", "m365_disengaged")
             if result.error:
