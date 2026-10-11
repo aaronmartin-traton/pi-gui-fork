@@ -40,6 +40,7 @@ export class M365CopilotConnector {
   private server: Server | undefined;
   private starting: Promise<M365CopilotStatus> | undefined;
   private signingIn: Promise<void> | undefined;
+  private signInError: string | undefined;
   private generation = 0;
   readonly baseUrl: string;
 
@@ -72,9 +73,11 @@ export class M365CopilotConnector {
           }
         : {
             ...base,
-            state: "waiting-for-sign-in",
+            state: this.signInError === undefined ? "waiting-for-sign-in" : "error",
             detail:
-              "Sign in to Microsoft 365 Copilot in the Edge window that opened. If it is already signed in, click the Copilot message box and type one character.",
+              this.signInError === undefined
+                ? "Sign in to Microsoft 365 Copilot in the Edge window that opened. If it is already signed in, click the Copilot message box and type one character."
+                : `Microsoft sign-in did not finish (${this.signInError}). Click Connect to try again.`,
           };
     }
     if (health.kind === "openai") {
@@ -96,6 +99,7 @@ export class M365CopilotConnector {
     if (current.kind !== "none" || this.server) {
       return this.status();
     }
+    this.signInError = undefined;
     await mkdir(this.options.dataDir, { recursive: true });
     const generation = this.generation;
     if (generation !== this.generation) {
@@ -128,8 +132,12 @@ export class M365CopilotConnector {
    */
   private beginSignIn(): void {
     this.signingIn ??= login()
-      .then(() => undefined)
+      .then(() => {
+        this.signInError = undefined;
+      })
       .catch((error: unknown) => {
+        // Without this the renderer would poll "Connecting…" forever.
+        this.signInError = error instanceof Error ? error.message : String(error);
         console.error("[m365] Microsoft sign-in failed", error);
       })
       .finally(() => {

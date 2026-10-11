@@ -589,6 +589,27 @@ export function preferredUsername(result: Record<string, unknown>): string | nul
 }
 
 
+/** The access token cached under `key` with its absolute expiry, or null. */
+function accessEntry(
+  cache: Record<string, unknown>,
+  key: string,
+): { readonly token: string; readonly expiresAt: number } | null {
+  const access = asRecord(cache["access"]);
+  if (access === null) {
+    return null;
+  }
+  const entry = asRecord(access[key]);
+  if (entry === null) {
+    return null;
+  }
+  const token = entry["token"];
+  const expiresAt = entry["expires_at"];
+  if (typeof token !== "string" || typeof expiresAt !== "number") {
+    return null;
+  }
+  return { token, expiresAt };
+}
+
 /** Caches one refresh token plus per-scope access tokens in a JSON file. */
 export class FileTokenProvider {
   private cachePath = "";
@@ -672,30 +693,24 @@ export class FileTokenProvider {
     await this.save();
   }
 
-  /** The cached access token for a scope key with its absolute expiry, or null. */
-  private accessEntry(key: string): { readonly token: string; readonly expiresAt: number } | null {
-    const access = asRecord(this.cache["access"]);
-    if (access === null) {
-      return null;
-    }
-    const entry = asRecord(access[key]);
-    if (entry === null) {
-      return null;
-    }
-    const token = entry["token"];
-    const expiresAt = entry["expires_at"];
-    if (typeof token !== "string" || typeof expiresAt !== "number") {
-      return null;
-    }
-    return { token, expiresAt };
-  }
-
   private cached(key: string): string | null {
-    const entry = this.accessEntry(key);
+    const entry = accessEntry(this.cache, key);
     if (entry === null) {
       return null;
     }
     return entry.expiresAt > Date.now() / 1000 + 60 ? entry.token : null;
+  }
+
+  /**
+   * Re-reads the cache file. `login()` and the proxy hold separate provider
+   * instances, so a token one of them stored is invisible to the other until the
+   * file is read again — the reference proxy re-reads its cache for the same reason.
+   */
+  private async reloadFromDisk(): Promise<void> {
+    const loaded = await this.load();
+    if (Object.keys(loaded).length > 0) {
+      this.cache = loaded;
+    }
   }
 
   private async interactive(scopes: readonly string[]): Promise<Record<string, unknown>> {
@@ -751,8 +766,11 @@ export class FileTokenProvider {
     readonly username: string | null;
   }> {
     await this.ready();
-    const entry = this.accessEntry(scopeKey(scopes));
-    const username: unknown = this.cache["username"];
+    // Read the file rather than the in-memory copy: the sign-in that just ran used
+    // a different instance, and this is what makes the status leave "signing in".
+    const cache = await this.load();
+    const entry = accessEntry(cache, scopeKey(scopes));
+    const username: unknown = cache["username"];
     return {
       valid: entry !== null && entry.expiresAt > Date.now() / 1000 + 60,
       secondsRemaining:
@@ -779,7 +797,12 @@ export class FileTokenProvider {
     return this.withLock(async () => {
       await this.ready();
       const key = scopeKey(scopes);
-      const cached = this.cached(key);
+      let cached = this.cached(key);
+      if (cached === null) {
+        // `login()` runs on its own provider instance; pick up what it stored.
+        await this.reloadFromDisk();
+        cached = this.cached(key);
+      }
       if (cached !== null) {
         return cached;
       }
