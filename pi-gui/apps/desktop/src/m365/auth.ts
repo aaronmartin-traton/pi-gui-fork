@@ -752,6 +752,14 @@ function accessEntry(
 }
 
 /**
+ * The per-user location the proxy used before the host app owned the cache; only
+ * the one-time migration below reads it.
+ */
+function legacyTokenCacheFile(): string {
+  return join(process.env["LOCALAPPDATA"] ?? homedir(), "M365CopilotProxy", "token-cache.json");
+}
+
+/**
  * The JSON token cache. The host app points `M365_CACHE_FILE` at its own userData
  * folder; otherwise the per-user application-data folder is used.
  */
@@ -760,7 +768,25 @@ export function tokenCacheFile(): string {
   if (override !== undefined && override.length > 0) {
     return override;
   }
-  return join(process.env["LOCALAPPDATA"] ?? homedir(), "M365CopilotProxy", "token-cache.json");
+  return legacyTokenCacheFile();
+}
+
+/**
+ * An install that predates the app owning its cache keeps the token file under
+ * `%LOCALAPPDATA%\M365CopilotProxy`. Copy it once, so upgrading does not sign the
+ * person out: the copy is exactly the JSON the proxy writes, and a stale or
+ * unreadable file is ignored by the reader like any other.
+ */
+async function adoptLegacyTokenCache(cachePath: string): Promise<void> {
+  const legacy = legacyTokenCacheFile();
+  if (legacy === cachePath || existsSync(cachePath)) {
+    return;
+  }
+  try {
+    await writeFile(cachePath, await readFile(legacy, "utf8"), "utf8");
+  } catch {
+    // No legacy sign-in to adopt.
+  }
 }
 
 /**
@@ -801,6 +827,7 @@ export class FileTokenProvider {
   private async initialize(): Promise<void> {
     this.cachePath = tokenCacheFile();
     await mkdir(dirname(this.cachePath), { recursive: true });
+    await adoptLegacyTokenCache(this.cachePath);
     liveProviders.add(this);
     this.cache = await this.load();
   }
