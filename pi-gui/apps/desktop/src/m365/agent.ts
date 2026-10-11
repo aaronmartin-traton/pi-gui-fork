@@ -15,21 +15,22 @@
 import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
-import { BAP_SCOPES, POWERPLATFORM_SCOPES } from "./auth.js";
+import { BAP_SCOPES, POWERPLATFORM_SCOPES, tokenCacheFile } from "./auth.js";
+import { asRecord, messageOf } from "./guards.js";
 
 /**
  * The scoped token call `agent.py` needs to reach BAP and Power Platform.
  *
- * This is deliberately structural: `auth.py`'s provider exposes only
- * `token(scopes)` and carries no `oid`/`tid` (those describe the token claims,
- * not the provider), and a scope-free `token()` satisfies it too, since a
- * function that takes fewer arguments is assignable to the wider signature.
+ * This is deliberately structural: `auth.ts`'s provider carries no `oid`/`tid`
+ * (those describe the token claims, not the provider), and a scope-free `token()`
+ * satisfies it too, since a function that takes fewer arguments is assignable to
+ * the wider signature. `interactive` is always false here: agent setup runs
+ * inside a chat turn, and a turn must never open the sign-in browser.
  */
 export interface ScopedTokenProvider {
-  token(scopes: readonly string[]): Promise<string>;
+  token(scopes: readonly string[], interactive?: boolean): Promise<string>;
 }
 
 export const BAP_API = "https://api.bap.microsoft.com";
@@ -178,7 +179,9 @@ export async function getOrCreateAgent(provider: ScopedTokenProvider): Promise<s
   if (explicit) {
     return explicit;
   }
-  const root = join(process.env["LOCALAPPDATA"] ?? homedir(), "M365CopilotProxy");
+  // Beside the token cache, so the cached agent id moves with the host app's
+  // userData (and is cleaned up with it) instead of surviving uninstall.
+  const root = dirname(tokenCacheFile());
   const cache_path = join(root, "agent-id.json");
   if (existsSync(cache_path)) {
     try {
@@ -192,8 +195,8 @@ export async function getOrCreateAgent(provider: ScopedTokenProvider): Promise<s
     }
   }
   try {
-    const bap_token = await provider.token(BAP_SCOPES);
-    const pp_token = await provider.token(POWERPLATFORM_SCOPES);
+    const bap_token = await provider.token(BAP_SCOPES, false);
+    const pp_token = await provider.token(POWERPLATFORM_SCOPES, false);
     const env_resp = await request(
       "GET",
       `${BAP_API}/providers/Microsoft.BusinessAppPlatform/environments/~default?api-version=2023-06-01`,
@@ -239,16 +242,9 @@ export async function getOrCreateAgent(provider: ScopedTokenProvider): Promise<s
     await writeFile(cache_path, JSON.stringify(payload, null, 2), "utf-8");
     return agent_id;
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(`Tool agent unavailable; using agent-less routing: ${detail}`);
+    console.error(`Tool agent unavailable; using agent-less routing: ${messageOf(error)}`);
     return null;
   }
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
 }
 
 function nonEmptyString(value: unknown): string | null {

@@ -39,6 +39,9 @@ export const MODEL_TONES: Readonly<Record<string, string>> = {
   "gpt-5.2-think-deeper": "Gpt_5_2_Reasoning",
 };
 
+/** The advertised model ids, derived once from the alias table. */
+export const MODEL_IDS: readonly string[] = Object.keys(MODEL_TONES);
+
 export const PAID_SCENARIO_TONES: Readonly<Record<string, true>> = {
   Claude_Opus: true,
   Gpt_6_Reasoning: true,
@@ -138,7 +141,7 @@ export function modelsResponse(): {
 } {
   return {
     object: "list",
-    data: Object.keys(MODEL_TONES).map((id) => ({
+    data: MODEL_IDS.map((id) => ({
       id,
       object: "model",
       created: 0,

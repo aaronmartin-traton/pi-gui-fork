@@ -13,3 +13,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 export function asRecord(value: unknown): Record<string, unknown> | null {
   return isRecord(value) ? value : null;
 }
+
+/** The readable text of a thrown value, for logs and error messages. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

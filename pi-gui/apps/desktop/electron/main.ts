@@ -70,6 +70,7 @@ import type { DesktopAppState, DesktopAppViewState } from "../contracts/desktop-
 import {
   desktopCommands,
   desktopIpc,
+  M365_COPILOT_PROVIDER_ID,
   getDesktopCommandFromShortcut,
   isSinglePressCommand,
   isCloseFocusedSurfaceShortcut,
@@ -1288,6 +1289,7 @@ app
     });
 
     createAppWindow();
+    startM365CopilotAtLaunch(store);
     void notificationPermissionService.getCurrentStatus().catch((error: unknown) => {
       console.error("[main] getCurrentStatus failed", error);
     });
@@ -1668,6 +1670,36 @@ function getM365CopilotConnector(): M365CopilotConnector {
       : {}),
   });
   return m365CopilotConnector;
+}
+
+/**
+ * The `m365-copilot` provider points at a proxy this process hosts, so a saved
+ * default of Microsoft 365 Copilot comes back after every restart pointing at a
+ * closed port: the onboarding notice stays hidden and the first message fails with
+ * a raw connection error. Bind the port when that provider is registered or saved
+ * as the default. Listen only — Edge opens when the person clicks Connect.
+ */
+function startM365CopilotAtLaunch(appStore: DesktopAppStore): void {
+  const registered = Object.values(appStore.snapshot().runtimeByWorkspace).some(
+    (runtime) =>
+      runtime.settings.defaultProvider === M365_COPILOT_PROVIDER_ID ||
+      runtime.providers.some((provider) => provider.id === M365_COPILOT_PROVIDER_ID),
+  );
+  if (!registered) {
+    return;
+  }
+  void getM365CopilotConnector()
+    .start({ signIn: false })
+    .then((status) => {
+      if (status.state === "error") {
+        console.error(
+          `[main] Microsoft 365 Copilot proxy did not start: ${status.detail ?? "unknown error"}`,
+        );
+      }
+    })
+    .catch((error: unknown) => {
+      console.error("[main] Microsoft 365 Copilot proxy failed to start", error);
+    });
 }
 
 async function probeCustomProviderModels(

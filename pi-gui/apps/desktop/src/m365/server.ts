@@ -14,19 +14,27 @@ import { randomUUID } from "node:crypto";
 
 import { InvalidRequestError, UpstreamError } from "./types.js";
 import type { TurnResult } from "./types.js";
-import * as agentModule from "./agent.js";
-import * as authModule from "./auth.js";
-import * as catalogModule from "./catalog.js";
-import * as imagesModule from "./images.js";
-import * as m365Module from "./m365.js";
-import * as toolingModule from "./tooling.js";
+import { getOrCreateAgent } from "./agent.js";
+import { AuthenticationError, FileTokenProvider, SIGN_IN_REQUIRED } from "./auth.js";
+import {
+  METERED_BUDGETS,
+  defaultFraming,
+  modelsResponse,
+  routingForModel,
+  toneForModel,
+  usesAgent,
+} from "./catalog.js";
+import { imagesFromMessages, prepareImageAttachments } from "./images.js";
+import { sendTurn } from "./m365.js";
 import {
   contentText,
   findShellTool,
   formatDelta,
+  formatMessages,
+  parseToolCalls,
   toolSpec,
 } from "./tooling.js";
-import { asRecord, isRecord } from "./guards.js";
+import { asRecord, isRecord, messageOf } from "./guards.js";
 
 export const MAX_BODY = 2 * 1024 * 1024;
 export const MAX_CONVERSATIONS = 128;
@@ -80,13 +88,15 @@ const PRIORITY_GATES: readonly string[] = [
 
 /** Minimal provider contract server.py relies on: scoped token acquisition. */
 type TokenSource = {
-  token(scopes?: readonly string[]): Promise<string>;
+  /** `interactive` is false on the request path, so a turn never opens a browser. */
+  token(scopes?: readonly string[], interactive?: boolean): Promise<string>;
   /** Cache-only state for `/healthz`; must not refresh or prompt. */
   tokenStatus(scopes?: readonly string[]): Promise<TokenStatus>;
 };
 
 export interface TokenStatus {
   readonly valid: boolean;
+  readonly refreshable: boolean;
   readonly secondsRemaining: number | null;
   readonly username: string | null;
 }
@@ -106,10 +116,6 @@ function asRecords(value: unknown): Record<string, unknown>[] {
     }
   }
   return out;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function envValue(name: string): string | null {
@@ -309,22 +315,7 @@ export interface ExhaustionEntry {
 // ProxyApplication
 // ---------------------------------------------------------------------------
 
-export interface ProxyApplicationDeps {
-  readonly agent: typeof agentModule;
-  readonly auth: typeof authModule;
-  readonly catalog: typeof catalogModule;
-  readonly images: typeof imagesModule;
-  readonly m365: typeof m365Module;
-  readonly tooling: typeof toolingModule;
-}
-
 export class ProxyApplication {
-  private readonly agent: typeof agentModule;
-  private readonly auth: typeof authModule;
-  private readonly catalog: typeof catalogModule;
-  private readonly images: typeof imagesModule;
-  private readonly m365: typeof m365Module;
-  private readonly tooling: typeof toolingModule;
   readonly conversations = new Map<string, Conversation>();
   readonly responseSessions = new Map<string, string>();
   private tokenProvider: TokenSource | null = null;
@@ -333,30 +324,9 @@ export class ProxyApplication {
   private readonly deadAgentTones = new Set<string>();
   private readonly aliveAgentTones = new Set<string>();
   private readonly exhaustions = new Map<string, ExhaustionEntry>();
-  private readonly metering: Record<string, number> = {};
-
-  constructor(deps: Partial<ProxyApplicationDeps> = {}) {
-    this.agent = deps.agent ?? agentModule;
-    this.auth = deps.auth ?? authModule;
-    this.catalog = deps.catalog ?? catalogModule;
-    this.images = deps.images ?? imagesModule;
-    this.m365 = deps.m365 ?? m365Module;
-    this.tooling = deps.tooling ?? toolingModule;
-  }
-
-  clear(): void {
-    this.conversations.clear();
-    this.responseSessions.clear();
-    this.deadAgentTones.clear();
-    this.aliveAgentTones.clear();
-    this.exhaustions.clear();
-    for (const key of Object.keys(this.metering)) {
-      delete this.metering[key];
-    }
-  }
 
   models(): Record<string, unknown> {
-    return this.catalog.modelsResponse();
+    return modelsResponse();
   }
 
   private conversation(key: string): Conversation {
@@ -415,14 +385,20 @@ export class ProxyApplication {
       }
       return fixture;
     }
-    const provider = this.tokenProvider ?? (this.tokenProvider = new this.auth.FileTokenProvider());
+    const provider = this.tokenProvider ?? (this.tokenProvider = new FileTokenProvider());
     try {
-      return await provider.token();
+      // Never interactive here: a chat turn that opened Edge would sit on the
+      // provider lock for minutes while the reply spins. A missing sign-in is the
+      // one case the co-worker fixes from Settings, so it returns a plain 401.
+      return await provider.token(undefined, false);
     } catch (error) {
-      if (error instanceof this.auth.AuthenticationError) {
+      if (error instanceof AuthenticationError) {
+        process.stderr.write(
+          `Microsoft 365 sign-in unavailable: ${error.detail ?? messageOf(error)}\n`,
+        );
         throw new ApiError(
           401,
-          messageOf(error),
+          SIGN_IN_REQUIRED,
           "m365_authentication_failed",
           "authentication_error",
         );
@@ -438,18 +414,21 @@ export class ProxyApplication {
   async health(): Promise<{
     readonly token: {
       readonly valid: boolean;
+      readonly refreshable: boolean;
       readonly seconds_remaining: number | null;
       readonly username: string | null;
     };
   }> {
     if (nonEmptyEnv("M365_TEST_ACCESS_TOKEN") !== null) {
-      return { token: { valid: true, seconds_remaining: null, username: null } };
+      // An injected token has nothing on disk to refresh; it is valid but not refreshable.
+      return { token: { valid: true, refreshable: false, seconds_remaining: null, username: null } };
     }
-    const provider = this.tokenProvider ?? (this.tokenProvider = new this.auth.FileTokenProvider());
+    const provider = this.tokenProvider ?? (this.tokenProvider = new FileTokenProvider());
     const status: TokenStatus = await provider.tokenStatus();
     return {
       token: {
         valid: status.valid,
+        refreshable: status.refreshable,
         seconds_remaining: status.secondsRemaining,
         username: status.username,
       },
@@ -458,11 +437,11 @@ export class ProxyApplication {
 
   private async agentFor(model: string, hasTools: boolean): Promise<string | null> {
     const force = envValue("M365_FORCE_AGENT");
-    const tone = this.catalog.toneForModel(model);
-    if (force === "0" || (!hasTools && !this.catalog.usesAgent(model, false))) {
+    const tone = toneForModel(model);
+    if (force === "0" || (!hasTools && !usesAgent(model, false))) {
       return null;
     }
-    if (hasTools && force !== "1" && !this.catalog.usesAgent(model, true)) {
+    if (hasTools && force !== "1" && !usesAgent(model, true)) {
       return null;
     }
     if (this.deadAgentTones.has(tone) && force !== "1") {
@@ -474,8 +453,8 @@ export class ProxyApplication {
         this.agentId = envValue("M365_AGENT_ID");
       } else {
         const provider =
-          this.tokenProvider ?? (this.tokenProvider = new this.auth.FileTokenProvider());
-        this.agentId = await this.agent.getOrCreateAgent(provider);
+          this.tokenProvider ?? (this.tokenProvider = new FileTokenProvider());
+        this.agentId = await getOrCreateAgent(provider);
       }
     }
     return this.agentId;
@@ -483,13 +462,13 @@ export class ProxyApplication {
 
   private budget(model: string): string | null {
     const lowered = model.toLowerCase();
-    const routing = this.catalog.routingForModel(model);
+    const routing = routingForModel(model);
     const scenario = routing[0];
     if (scenario !== "OfficeWebPaidCopilot") {
       return null;
     }
     if (
-      this.catalog.toneForModel(model) === "Claude_Opus" &&
+      toneForModel(model) === "Claude_Opus" &&
       !lowered.startsWith("claude-opus-4.5") &&
       !lowered.startsWith("claude-opus-4-5")
     ) {
@@ -562,12 +541,11 @@ export class ProxyApplication {
     if (Object.keys(result.metering).length === 0) {
       return;
     }
-    Object.assign(this.metering, result.metering);
     const budget = this.budget(model);
     if (budget === null) {
       return;
     }
-    const budgets = this.catalog.METERED_BUDGETS[budget];
+    const budgets = METERED_BUDGETS[budget];
     if (budgets === undefined) {
       throw new TypeError(`Unknown metered budget: ${budget}`);
     }
@@ -584,16 +562,36 @@ export class ProxyApplication {
 
   private priorityError(exhaustion: ExhaustionEntry, model: string): ApiError {
     const seconds = Math.max(1, Math.floor((exhaustion.resetsAt - Date.now()) / 1000 + 0.999));
-    const reset = new Date(exhaustion.resetsAt).toISOString();
-    const message = `Priority access for ${model} is exhausted until ${reset}. ${exhaustion.message}`;
+    // Local time, because "resets at midnight UTC" means nothing to the reader.
+    const reset = new Date(exhaustion.resetsAt).toLocaleString(undefined, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    // Microsoft's own wording stays in the log for support; the reply gets the
+    // one sentence the co-worker can act on.
+    process.stderr.write(`Priority access exhausted for ${model}: ${exhaustion.message}\n`);
+    const message = `You have used up your priority access to ${model} until ${reset}. Pick a different model, or send the message again after that time.`;
     return new ApiError(429, message, "priority_access_exhausted", undefined, {
       "Retry-After": String(seconds),
     });
   }
 
+  /**
+   * A dropped connection to Microsoft 365. The transport's own text is a socket
+   * or fetch message, so it goes to the log and the reply names the next step.
+   */
+  private transportError(result: TurnResult): ApiError {
+    process.stderr.write(`Microsoft 365 transport failed: ${result.error ?? "no detail"}\n`);
+    return new ApiError(
+      502,
+      "pi lost its connection to Microsoft 365. Check your internet connection, then send your message again.",
+      "m365_transport_error",
+    );
+  }
+
   private framingVariant(model: string): string {
     const configured = nonEmptyEnv("M365_FRAMING_VARIANT");
-    const fallback = this.catalog.defaultFraming(model);
+    const fallback = defaultFraming(model);
     const variant = configured ?? fallback;
     return Object.hasOwn(FRAMING_VARIANTS, variant) ? variant : fallback;
   }
@@ -624,7 +622,7 @@ export class ProxyApplication {
       const tools = asRecords(body.tools);
       const toolChoice = body.tool_choice;
       const hasTools = tools.length > 0 && toolChoice !== "none";
-      const shellTool = hasTools ? this.tooling.findShellTool(tools) : null;
+      const shellTool = hasTools ? findShellTool(tools) : null;
       let shellToolName: string | null = null;
       if (shellTool !== null) {
         const fn = asRecord(shellTool.function);
@@ -662,7 +660,7 @@ export class ProxyApplication {
       }
       let prompt: string;
       if (state.sentCount === 0) {
-        prompt = this.tooling.formatMessages(
+        prompt = formatMessages(
           messages,
           tools,
           toolChoice,
@@ -671,7 +669,7 @@ export class ProxyApplication {
         );
       } else {
         const deltaMessages = messages.slice(state.sentCount);
-        prompt = deltaMessages.length > 0 ? this.tooling.formatDelta(deltaMessages, messages) : "";
+        prompt = deltaMessages.length > 0 ? formatDelta(deltaMessages, messages) : "";
         if (prompt.length === 0) {
           prompt = "Please continue.";
         }
@@ -681,8 +679,8 @@ export class ProxyApplication {
       const newMessages = state.sentCount === 0 ? messages : messages.slice(state.sentCount);
       let annotations: readonly Record<string, unknown>[] | null = null;
       try {
-        const images = await this.images.imagesFromMessages(newMessages);
-        annotations = await this.images.prepareImageAttachments(
+        const images = await imagesFromMessages(newMessages);
+        annotations = await prepareImageAttachments(
           token,
           state.conversationId,
           images,
@@ -692,13 +690,20 @@ export class ProxyApplication {
           throw new ApiError(400, error.message, "invalid_request_error");
         }
         if (error instanceof UpstreamError) {
-          throw new ApiError(502, error.message, "m365_image_upload_failed");
+          // The upstream text is a raw HTTP body slice; the log keeps it, the
+          // reply keeps the next step.
+          process.stderr.write(`Microsoft 365 image upload failed: ${error.message}\n`);
+          throw new ApiError(
+            502,
+            "pi could not send the attached image to Microsoft 365. Send the message without the image, or try again in a moment.",
+            "m365_image_upload_failed",
+          );
         }
         throw error;
       }
       const streamDelta =
         Boolean(body.stream) && !hasTools && requestedBudget === null ? (onDelta ?? null) : null;
-      let result = await this.m365.sendTurn(
+      let result = await sendTurn(
         token,
         prompt,
         model,
@@ -711,7 +716,7 @@ export class ProxyApplication {
         interceptHostedShell,
         annotations,
       );
-      const tone = this.catalog.toneForModel(model);
+      const tone = toneForModel(model);
       if (
         agentId !== null &&
         asRecord(result.result)?.value === "InternalError" &&
@@ -722,14 +727,14 @@ export class ProxyApplication {
       ) {
         this.deadAgentTones.add(tone);
         state.reset();
-        prompt = this.tooling.formatMessages(
+        prompt = formatMessages(
           messages,
           tools,
           toolChoice,
           state.conversationId,
           this.framingVariant(model),
         );
-        result = await this.m365.sendTurn(
+        result = await sendTurn(
           token,
           prompt,
           model,
@@ -744,11 +749,7 @@ export class ProxyApplication {
         );
       }
       if (result.errorCode === "M365TransportError") {
-        throw new ApiError(
-          502,
-          result.error !== null && result.error.length > 0 ? result.error : "M365 transport failed",
-          "m365_transport_error",
-        );
+        throw this.transportError(result);
       }
       this.rememberMetering(result, model);
       const exhausted = this.priorityExhaustion(result, model);
@@ -758,14 +759,14 @@ export class ProxyApplication {
           state.reset();
           model = fallbackModel;
           agentId = await this.agentFor(model, hasTools);
-          prompt = this.tooling.formatMessages(
+          prompt = formatMessages(
             messages,
             tools,
             toolChoice,
             state.conversationId,
             this.framingVariant(model),
           );
-          result = await this.m365.sendTurn(
+          result = await sendTurn(
             token,
             prompt,
             model,
@@ -779,13 +780,7 @@ export class ProxyApplication {
             annotations,
           );
           if (result.errorCode === "M365TransportError") {
-            throw new ApiError(
-              502,
-              result.error !== null && result.error.length > 0
-                ? result.error
-                : "M365 transport failed",
-              "m365_transport_error",
-            );
+            throw this.transportError(result);
           }
           this.rememberMetering(result, model);
           const fallbackExhaustion = this.priorityExhaustion(result, model);
@@ -800,11 +795,12 @@ export class ProxyApplication {
         asRecord(result.result)?.value === "Throttled" ||
         result.errorCode === "PerUserThrottled"
       ) {
+        if (result.error !== null && result.error.length > 0) {
+          process.stderr.write(`Microsoft 365 throttled this conversation: ${result.error}\n`);
+        }
         throw new ApiError(
           429,
-          result.error !== null && result.error.length > 0
-            ? result.error
-            : "Microsoft 365 throttled this conversation",
+          "Microsoft 365 is limiting how fast pi can send messages right now. Wait about a minute, then send your message again.",
           "m365_throttled",
           undefined,
           { "Retry-After": "60" },
@@ -816,14 +812,14 @@ export class ProxyApplication {
         if (variant === "baseline") {
           variant = "relay";
         }
-        prompt = this.tooling.formatMessages(
+        prompt = formatMessages(
           messages,
           tools,
           toolChoice,
           state.conversationId,
           variant,
         );
-        result = await this.m365.sendTurn(
+        result = await sendTurn(
           token,
           prompt,
           model,
@@ -837,23 +833,33 @@ export class ProxyApplication {
           null,
         );
         if (result.messageType === "Disengaged") {
-          throw new ApiError(502, "M365 returned a Disengaged response", "m365_disengaged");
+          throw new ApiError(
+            502,
+            "Microsoft 365 stopped answering this conversation. Send your message again to start a fresh one.",
+            "m365_disengaged",
+          );
         }
       }
       if (result.error !== null && result.error.length > 0) {
-        throw new ApiError(502, result.error, result.errorCode ?? "m365_error");
+        // Microsoft's wording (often an internal error name) is for the log only.
+        process.stderr.write(`Microsoft 365 turn failed: ${result.error}\n`);
+        throw new ApiError(
+          502,
+          "Microsoft 365 returned an error instead of a reply. Send your message again.",
+          result.errorCode ?? "m365_error",
+        );
       }
       if (result.text.length === 0) {
         throw new ApiError(
           502,
-          "M365 returned an empty turn without a Disengaged frame",
+          "Microsoft 365 sent an empty reply. Send your message again.",
           "m365_empty_turn",
         );
       }
       let toolCalls: readonly Record<string, unknown>[] = [];
       let text: string;
       if (tools.length > 0 && toolChoice !== "none") {
-        const parsed = this.tooling.parseToolCalls(result.text, tools);
+        const parsed = parseToolCalls(result.text, tools);
         toolCalls = parsed.toolCalls;
         text = parsed.text;
       } else {
@@ -864,7 +870,7 @@ export class ProxyApplication {
       state.model = model;
       state.touched = monotonic();
       if (agentId !== null && result.text.length > 0) {
-        this.aliveAgentTones.add(this.catalog.toneForModel(model));
+        this.aliveAgentTones.add(toneForModel(model));
       }
       return new ChatResult(
         `chatcmpl-${newId()}`,
@@ -1729,9 +1735,7 @@ async function handleRequest(
   }
 }
 
-export const APPLICATION: ProxyApplication = new ProxyApplication();
-
-export function createHttpServer(app: ProxyApplication = APPLICATION): Server {
+export function createHttpServer(app: ProxyApplication): Server {
   const server = createServer((req, res) => {
     void handleRequest(app, req, res);
   });

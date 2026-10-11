@@ -9,6 +9,7 @@
 
 import { randomUUID } from "node:crypto";
 import { routingForModel, toneForModel } from "./catalog.js";
+import { asRecord, isRecord, messageOf } from "./guards.js";
 import type { TurnResult } from "./types.js";
 
 export const RS = "\u001e";
@@ -117,10 +118,7 @@ function _claims(token: string): Record<string, unknown> | null {
     const decoded: unknown = JSON.parse(
       Buffer.from(payload + "=".repeat(padding), "base64url").toString("utf8"),
     );
-    if (decoded === null || typeof decoded !== "object" || Array.isArray(decoded)) {
-      return null;
-    }
-    return decoded as Record<string, unknown>;
+    return asRecord(decoded);
   } catch {
     return null;
   }
@@ -253,19 +251,18 @@ function _parseFrames(raw: string): Record<string, unknown>[] {
     } catch {
       continue;
     }
-    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
-      frames.push(parsed as Record<string, unknown>);
+    if (isRecord(parsed)) {
+      frames.push(parsed);
     }
   }
   return frames;
 }
 
-function _textFromMessages(messages: unknown): readonly [string, string | null, number | null] {
+function _textFromMessages(messages: unknown): readonly [string, string | null] {
   const texts: string[] = [];
   let messageType: string | null = null;
-  let turnCount: number | null = null;
   if (!Array.isArray(messages)) {
-    return ["", null, null];
+    return ["", null];
   }
   for (const message of messages) {
     const item = _object(message);
@@ -276,16 +273,12 @@ function _textFromMessages(messages: unknown): readonly [string, string | null, 
     if (messageTypeValue) {
       messageType = _errorText(messageTypeValue);
     }
-    const turnCountValue = item["turnCount"];
-    if (typeof turnCountValue === "number" && Number.isInteger(turnCountValue)) {
-      turnCount = turnCountValue;
-    }
     const text = item["text"];
     if (typeof text === "string" && text && !messageTypeValue) {
       texts.push(text);
     }
   }
-  return [texts.join("\n\n"), messageType, turnCount];
+  return [texts.join("\n\n"), messageType];
 }
 
 function _hostedShellCommand(messages: unknown): string | null {
@@ -329,11 +322,9 @@ function _fold(current: string, nextText: string): string {
   return current + nextText;
 }
 
+/** The port's `_object`: a record view of `value`, or an empty one. */
 function _object(value: unknown): Record<string, unknown> {
-  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
-  }
-  return {};
+  return asRecord(value) ?? {};
 }
 
 function _objects(value: unknown): Record<string, unknown>[] {
@@ -369,7 +360,7 @@ function _frameText(data: unknown): string {
 
 /** The `message` on a socket error event, when the runtime's event carries one. */
 function _errorMessage(event: unknown): string | undefined {
-  if (typeof event !== "object" || event === null || !("message" in event)) {
+  if (!isRecord(event) || !("message" in event)) {
     return undefined;
   }
   const message: unknown = event.message;
@@ -503,7 +494,6 @@ export async function sendTurn(
     messageType: null,
     error: null,
     errorCode: null,
-    turnCount: null,
     rawItem: null,
   };
   let socket: WebSocket | null = null;
@@ -594,10 +584,9 @@ export async function sendTurn(
                 intercepted = true;
                 break;
               }
-              const [snapshot, messageType, turnCount] = _textFromMessages(arg["messages"]);
+              const [snapshot, messageType] = _textFromMessages(arg["messages"]);
               currentText = _fold(currentText, snapshot);
               result.messageType = messageType || result.messageType;
-              result.turnCount = turnCount || result.turnCount;
             }
             if (onDelta && currentText.length > result.text.length) {
               const delta = currentText.slice(result.text.length);
@@ -611,18 +600,13 @@ export async function sendTurn(
         } else if (frameType === 2) {
           const item = _object(msg["item"]);
           result.rawItem = item;
-          const [snapshot, messageType, turnCount] = _textFromMessages(item["messages"]);
+          const [snapshot, messageType] = _textFromMessages(item["messages"]);
           if (snapshot) {
             currentText = _fold(currentText, snapshot);
           }
           result.messageType = messageType || result.messageType;
-          result.turnCount = turnCount || result.turnCount;
           const serverResult = item["result"];
-          if (
-            serverResult !== null &&
-            typeof serverResult === "object" &&
-            !Array.isArray(serverResult)
-          ) {
+          if (isRecord(serverResult)) {
             const payload = _object(serverResult);
             result.result = payload;
             const value = payload["value"];
@@ -634,9 +618,9 @@ export async function sendTurn(
             result.errorCode = typeof errorCode === "string" ? errorCode : null;
           }
           const throttling = item["throttling"];
-          if (throttling !== null && typeof throttling === "object" && !Array.isArray(throttling)) {
+          if (isRecord(throttling)) {
             const metering = _object(throttling)["metering"];
-            if (metering !== null && typeof metering === "object" && !Array.isArray(metering)) {
+            if (isRecord(metering)) {
               const allowances: Record<string, number> = {};
               for (const [key, entry] of Object.entries(metering)) {
                 const remaining = _object(entry)["remainingAllowance"];
@@ -665,7 +649,7 @@ export async function sendTurn(
       }
     }
   } catch (error) {
-    result.error = error instanceof Error ? error.message : String(error);
+    result.error = messageOf(error);
     result.errorCode = "M365TransportError";
   } finally {
     frames?.stop();

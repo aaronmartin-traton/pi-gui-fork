@@ -12,18 +12,17 @@
  */
 
 import { createHash } from "node:crypto";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { basename } from "node:path";
+import { tmpdir } from "node:os";
+import { basename, join } from "node:path";
 import type { Duplex } from "node:stream";
 
-import * as agentModule from "./agent.js";
 import * as authModule from "./auth.js";
 import * as catalogModule from "./catalog.js";
-import * as imagesModule from "./images.js";
-import * as m365Module from "./m365.js";
+import { asRecord, isRecord, messageOf } from "./guards.js";
 import { RS, STOP_FRAME } from "./m365.js";
 import { ProxyApplication, createHttpServer } from "./server.js";
-import * as toolingModule from "./tooling.js";
 
 const OID = "11111111-1111-4111-8111-111111111111";
 const TID = "22222222-2222-4222-8222-222222222222";
@@ -77,10 +76,9 @@ const uploads: UploadRecord[] = [];
 
 type Json = Record<string, unknown>;
 
+/** Fixture view of round-tripped JSON: a record, or an empty one. */
 function asJson(value: unknown): Json {
-  return typeof value === "object" && value !== null && !Array.isArray(value)
-    ? (value as Json)
-    : {};
+  return asRecord(value) ?? {};
 }
 
 function asList(value: unknown): readonly unknown[] {
@@ -113,8 +111,8 @@ function canonical(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(canonical).join(",")}]`;
   }
-  if (typeof value === "object" && value !== null) {
-    const entries = Object.entries(value as Json)
+  if (isRecord(value)) {
+    const entries = Object.entries(value)
       .filter(([, entry]) => entry !== undefined)
       .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
     return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(",")}}`;
@@ -595,7 +593,7 @@ function createChathubServer(): Server {
     );
     const connection = new ChathubSocket(socket);
     answerTurn(connection, request.url ?? "/").catch((error: unknown) => {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = messageOf(error);
       process.stderr.write(`fixture chathub turn failed: ${detail}\n`);
       connection.close();
     });
@@ -793,10 +791,89 @@ async function checkModels(base: string): Promise<void> {
   const health = await http("GET", `${base}/healthz`);
   check(health.status === 200, `GET /healthz returned ${health.status}: ${health.body}`);
   const healthBody: unknown = JSON.parse(health.body);
+  const healthToken = asJson(asJson(healthBody)["token"]);
+  same(
+    Object.keys(healthToken).sort(),
+    ["refreshable", "seconds_remaining", "username", "valid"],
+    "/healthz token shape",
+  );
   check(
-    asJson(asJson(healthBody)["token"])["valid"] === true,
+    healthToken["valid"] === true,
     `/healthz should report the fixture token as valid: ${health.body}`,
   );
+  check(
+    healthToken["refreshable"] === false,
+    `/healthz should report the injected fixture token as not refreshable: ${health.body}`,
+  );
+  check(
+    healthToken["seconds_remaining"] === null && healthToken["username"] === null,
+    `/healthz should report no expiry or account for the injected fixture token: ${health.body}`,
+  );
+}
+
+/**
+ * `/healthz`'s `refreshable` tracks the on-disk refresh token, independent of the
+ * cached access token's own window: a refresh token means the next request can
+ * silently refresh. This drives `FileTokenProvider.tokenStatus` through a throwaway
+ * `M365_CACHE_FILE`, which also proves the env override is honored.
+ */
+async function checkTokenStatus(): Promise<void> {
+  const previous = process.env.M365_CACHE_FILE;
+  const directory = await mkdtemp(join(tmpdir(), "m365-e2e-cache-"));
+  try {
+    const now = Date.now() / 1000;
+    const key = authModule.scopeKey(authModule.CHAT_SCOPES);
+
+    // An expired access token plus a refresh token: not valid, but refreshable.
+    const expiredFile = join(directory, "token-cache.json");
+    await writeFile(
+      expiredFile,
+      JSON.stringify({
+        refresh_token: "fixture-refresh-token",
+        username: "fixture@example.com",
+        access: { [key]: { token: "expired-access-token", expires_at: now - 10 } },
+      }),
+      "utf8",
+    );
+    process.env.M365_CACHE_FILE = expiredFile;
+    const expired = await new authModule.FileTokenProvider().tokenStatus(authModule.CHAT_SCOPES);
+    same(
+      expired,
+      {
+        valid: false,
+        refreshable: true,
+        secondsRemaining: 0,
+        username: "fixture@example.com",
+      },
+      "an expired token with a refresh token on disk",
+    );
+
+    // A fresh access token with no refresh token: valid, but not refreshable.
+    const noRefreshFile = join(directory, "no-refresh.json");
+    await writeFile(
+      noRefreshFile,
+      JSON.stringify({
+        access: { [key]: { token: "fresh-access-token", expires_at: now + 3600 } },
+      }),
+      "utf8",
+    );
+    process.env.M365_CACHE_FILE = noRefreshFile;
+    const fresh = await new authModule.FileTokenProvider().tokenStatus(authModule.CHAT_SCOPES);
+    check(fresh.valid === true, "a fresh access token must be valid");
+    check(fresh.refreshable === false, "no refresh token on disk means not refreshable");
+    check(
+      fresh.secondsRemaining !== null && fresh.secondsRemaining > 3500,
+      `secondsRemaining should reflect the access token's expiry: ${fresh.secondsRemaining}`,
+    );
+    check(fresh.username === null, `no cached username must report null: ${fresh.username}`);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.M365_CACHE_FILE;
+    } else {
+      process.env.M365_CACHE_FILE = previous;
+    }
+    await rm(directory, { recursive: true, force: true });
+  }
 }
 
 async function checkChatToolLoops(base: string): Promise<ChatLoopBaseline> {
@@ -1314,20 +1391,14 @@ export async function runE2E(): Promise<string> {
   delete process.env.M365_FRAMING_VARIANT;
   delete process.env.M365_ALLOW_MULTI_TOOL;
 
-  const app = new ProxyApplication({
-    agent: agentModule,
-    auth: authModule,
-    catalog: catalogModule,
-    images: imagesModule,
-    m365: m365Module,
-    tooling: toolingModule,
-  });
+  const app = new ProxyApplication();
   const api = createHttpServer(app);
   const apiPort = await listenOn(api);
   const base = `http://127.0.0.1:${apiPort}`;
   const restoreStderr = process.env.M365_E2E_QUIET ? muteStderr() : null;
   try {
     await checkModels(base);
+    await checkTokenStatus();
     const chatBaseline = await checkChatToolLoops(base);
     await checkImageUpload(base);
     await checkHostedShellRouting(base, chatBaseline);
@@ -1362,7 +1433,7 @@ if (invokedDirectly) {
       process.stdout.write(`${line}\n`);
     },
     (error: unknown) => {
-      const detail = error instanceof Error ? error.message : String(error);
+      const detail = messageOf(error);
       process.stderr.write(`${detail}\n`);
       process.exitCode = 1;
     },

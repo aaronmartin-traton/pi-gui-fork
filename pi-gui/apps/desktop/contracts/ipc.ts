@@ -76,11 +76,16 @@ export const M365_COPILOT_MODEL_ID = "m365-copilot";
 export const M365_COPILOT_CONTEXT_WINDOW = 32_000;
 
 export type M365CopilotState =
-  "stopped" | "starting" | "waiting-for-sign-in" | "ready" | "error";
+  | "stopped" // no proxy listening
+  | "starting" // binding the port
+  | "waiting-for-sign-in" // proxy up, no usable token, no sign-in in progress
+  | "signing-in" // an Edge window is open right now
+  | "ready" // usable token (valid OR refreshable)
+  | "error"; // something the user must act on
 
 export interface M365CopilotStatus {
   readonly state: M365CopilotState;
-  /** Plain-language explanation for every state except ready and stopped. */
+  /** Plain-language explanation of what is happening and what to do next. */
   readonly detail?: string;
   readonly baseUrl: string;
   readonly providerId: string;
@@ -90,10 +95,12 @@ export interface M365CopilotStatus {
   readonly managed: boolean;
   /** Minutes left on the captured Copilot token; the proxy refreshes it automatically. */
   readonly minutesLeft?: number;
+  /** True when a stored refresh token can mint a new access token without a new sign-in. */
+  readonly refreshable?: boolean;
   /** The signed-in Microsoft account, when the proxy knows it. */
   readonly account?: string;
   /** Model ids the proxy advertises; Connect registers all of them. */
-  readonly models?: readonly string[];
+  readonly models: readonly string[];
 }
 
 export type CustomProviderProbeResult =
@@ -198,6 +205,9 @@ export const desktopIpc = {
   getM365CopilotStatus: "pi-gui:get-m365-copilot-status",
   startM365Copilot: "pi-gui:start-m365-copilot",
   stopM365Copilot: "pi-gui:stop-m365-copilot",
+  cancelM365Copilot: "pi-gui:cancel-m365-copilot",
+  disconnectM365Copilot: "pi-gui:disconnect-m365-copilot",
+  signOutM365Copilot: "pi-gui:sign-out-m365-copilot",
   setEnableSkillCommands: "pi-gui:set-enable-skill-commands",
   setScopedModelPatterns: "pi-gui:set-scoped-model-patterns",
   setSkillEnabled: "pi-gui:set-skill-enabled",
@@ -799,6 +809,9 @@ export interface PiDesktopApi {
   getM365CopilotStatus(): Promise<M365CopilotStatus>;
   startM365Copilot(): Promise<M365CopilotStatus>;
   stopM365Copilot(): Promise<M365CopilotStatus>;
+  cancelM365Copilot(): Promise<M365CopilotStatus>;
+  disconnectM365Copilot(): Promise<M365CopilotStatus>;
+  signOutM365Copilot(): Promise<M365CopilotStatus>;
   setEnableSkillCommands(workspaceId: string, enabled: boolean): Promise<DesktopAppState>;
   setScopedModelPatterns(
     workspaceId: string,

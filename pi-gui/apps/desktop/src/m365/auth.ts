@@ -6,12 +6,12 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { asRecord } from "./guards.js";
+import { asRecord, isRecord, messageOf } from "./guards.js";
 
 export const CLIENT_ID = "c0ab8ce9-e9a0-42e7-b064-33d422df41f1";
 export const AUTHORITY = "https://login.microsoftonline.com/common";
@@ -25,7 +25,83 @@ export const CHAT_SCOPES = [
 export const BAP_SCOPES = ["https://api.bap.microsoft.com/.default"] as const;
 export const POWERPLATFORM_SCOPES = ["https://api.powerplatform.com/.default"] as const;
 
-export class AuthenticationError extends Error {}
+/**
+ * What a chat request says when there is no usable sign-in. A request must never
+ * start a sign-in, so it names the one action that fixes it.
+ */
+export const SIGN_IN_REQUIRED =
+  "Your Microsoft 365 sign-in expired. Open Settings → Microsoft 365 Copilot and click Connect.";
+
+/**
+ * A sign-in failure. `message` is what the co-worker reads, so it stays plain
+ * language with a next step; `detail` carries the raw browser/OAuth text for a
+ * support log and is never shown as the message.
+ */
+export class AuthenticationError extends Error {
+  readonly detail: string | null;
+
+  constructor(message: string, detail?: string) {
+    super(message);
+    this.name = "AuthenticationError";
+    this.detail = detail === undefined || detail.length === 0 ? null : detail;
+  }
+}
+
+/** Plain-language text for the OAuth error codes Microsoft's sign-in returns. */
+const OAUTH_ERROR_TEXT: Readonly<Record<string, string>> = {
+  access_denied: "You cancelled the Microsoft 365 sign-in. Click Connect when you are ready to try again.",
+  consent_required: "Microsoft 365 needs your permission before pi can use it. Click Connect and accept the prompt.",
+  interaction_required: "Microsoft 365 needs you to sign in again. Click Connect and follow the prompts.",
+  invalid_client: "This PC is not set up for Microsoft 365 sign-in. Ask your IT team for help.",
+  invalid_grant: "Your Microsoft 365 sign-in has expired. Click Connect to sign in again.",
+  login_required: "Microsoft 365 needs you to sign in again. Click Connect and follow the prompts.",
+  unauthorized_client: "Your organization does not allow pi to sign in to Microsoft 365. Ask your IT team to approve it.",
+};
+
+/** A cancelled sign-in: `login()`'s callers recognise the `AbortError` name. */
+function abortError(): Error {
+  return new DOMException("The sign-in was cancelled", "AbortError");
+}
+
+/**
+ * The text every browser-side problem shows. Edge being busy, missing or wedged
+ * all end the same way for the co-worker, so one string keeps them consistent.
+ */
+const BROWSER_TROUBLE =
+  "Microsoft sign-in could not start. Close any Microsoft Edge windows, then click Connect again.";
+const BROWSER_CLOSED =
+  "The sign-in window closed before sign-in finished. Click Connect to try again.";
+const SIGN_IN_TIMED_OUT =
+  "Microsoft 365 sign-in was not completed in time. Click Connect to try again.";
+/** Fallback when Microsoft reports a failure we cannot map to a specific fix. */
+const SIGN_IN_FAILED =
+  "Microsoft 365 did not finish signing you in. Click Connect to try again.";
+
+/** Rejects as soon as `signal` aborts, without waiting for `promise` itself. */
+function raceAbort<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (signal === undefined) {
+    return promise;
+  }
+  if (signal.aborted) {
+    return Promise.reject(abortError());
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => {
+      reject(abortError());
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    promise.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error: unknown) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
+}
 
 /** A redirect captured from the sign-in browser: either an error or a code. */
 export type AuthorizationResponse =
@@ -79,7 +155,7 @@ class CdpSocket {
       let message: CdpMessage;
       try {
         const parsed: unknown = JSON.parse(data);
-        if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        if (!isRecord(parsed)) {
           return;
         }
         message = parsed as CdpMessage;
@@ -94,10 +170,17 @@ class CdpSocket {
       }
     });
     this.socket.addEventListener("error", () => {
-      this.fail(new Error("The sign-in browser connection failed"));
+      this.fail(
+        new AuthenticationError(
+          BROWSER_TROUBLE,
+          "The sign-in browser connection failed (CDP WebSocket error)",
+        ),
+      );
     });
     this.socket.addEventListener("close", () => {
-      this.fail(new Error("The sign-in browser closed the connection"));
+      this.fail(
+        new AuthenticationError(BROWSER_CLOSED, "The sign-in browser closed the connection"),
+      );
     });
   }
 
@@ -115,7 +198,12 @@ class CdpSocket {
   async ready(timeoutMs: number): Promise<void> {
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
-        reject(new AuthenticationError("Timed out starting the sign-in browser"));
+        reject(
+          new AuthenticationError(
+            BROWSER_TROUBLE,
+            `Timed out starting the sign-in browser (${timeoutMs} ms)`,
+          ),
+        );
       }, timeoutMs);
       this.opened.then(
         () => {
@@ -183,26 +271,34 @@ function browserExecutable(): string {
     if (existsSync(configured)) {
       return configured;
     }
-    throw new AuthenticationError("CHROMIUM_PATH does not point to a browser executable");
+    throw new AuthenticationError(
+      "The browser set up for Microsoft 365 sign-in is missing. Ask your IT team to check the CHROMIUM_PATH setting.",
+      `CHROMIUM_PATH does not point to a browser executable: ${configured}`,
+    );
   }
   const roots = [
     process.env["PROGRAMFILES"] ?? "",
     process.env["PROGRAMFILES(X86)"] ?? "",
     process.env["LOCALAPPDATA"] ?? "",
   ];
+  // Edge ships with Windows 10 and 11, so it is both the reliable choice and the
+  // one whose saved profile makes a repeat sign-in silent; Chrome is the fallback.
   const browsers = [
-    "Google/Chrome/Application/chrome.exe",
     "Microsoft/Edge/Application/msedge.exe",
+    "Google/Chrome/Application/chrome.exe",
   ];
-  for (const root of roots) {
-    for (const browser of browsers) {
+  for (const browser of browsers) {
+    for (const root of roots) {
       const candidate = join(root, browser);
       if (existsSync(candidate)) {
         return candidate;
       }
     }
   }
-  throw new AuthenticationError("Chrome or Edge was not found; set CHROMIUM_PATH to its executable");
+  throw new AuthenticationError(
+    "Microsoft Edge is not installed on this PC. Install Microsoft Edge, or ask your IT team for help.",
+    "Chrome or Edge was not found; set CHROMIUM_PATH to its executable",
+  );
 }
 
 
@@ -226,13 +322,13 @@ async function cdpCall(
     const message = await socket.recv(timeoutMs);
     if (message.id === commandId) {
       if ("error" in message) {
-        throw new AuthenticationError("Browser authorization setup failed");
+        throw new AuthenticationError(
+          BROWSER_TROUBLE,
+          `Browser authorization setup failed: CDP ${method} returned ${JSON.stringify(message.error)}`,
+        );
       }
       const result = message.result;
-      if (result === null || typeof result !== "object" || Array.isArray(result)) {
-        return {};
-      }
-      return result as Record<string, unknown>;
+      return asRecord(result) ?? {};
     }
     const authResponse = authorizationResponse(message);
     if (authResponse !== null) {
@@ -246,15 +342,15 @@ function authorizationResponse(message: CdpMessage): AuthorizationResponse | nul
   if (message.method !== "Network.requestWillBeSent") {
     return null;
   }
-  const params = message.params;
-  if (params === null || typeof params !== "object") {
+  const params = asRecord(message.params);
+  if (params === null) {
     return null;
   }
-  const request = (params as Record<string, unknown>)["request"];
-  if (request === null || typeof request !== "object") {
+  const request = asRecord(params["request"]);
+  if (request === null) {
     return null;
   }
-  const requestUrl = (request as Record<string, unknown>)["url"];
+  const requestUrl = request["url"];
   if (typeof requestUrl !== "string") {
     return null;
   }
@@ -312,13 +408,13 @@ async function reservePort(): Promise<number> {
   return new Promise<number>((resolve, reject) => {
     const server = createServer();
     server.once("error", () => {
-      reject(new AuthenticationError("Could not reserve a debugging port"));
+      reject(new AuthenticationError(BROWSER_TROUBLE, "Could not reserve a debugging port"));
     });
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       server.close(() => {
         if (address === null || typeof address === "string") {
-          reject(new AuthenticationError("Could not reserve a debugging port"));
+          reject(new AuthenticationError(BROWSER_TROUBLE, "Could not reserve a debugging port"));
           return;
         }
         resolve(address.port);
@@ -330,7 +426,11 @@ async function reservePort(): Promise<number> {
 async function captureAuthorizationResponse(
   authUri: string,
   profileDir: string,
+  signal?: AbortSignal,
 ): Promise<AuthorizationResponse> {
+  if (signal?.aborted) {
+    throw abortError();
+  }
   const browser = browserExecutable();
   const port = await reservePort();
   let child: ChildProcess;
@@ -348,7 +448,10 @@ async function captureAuthorizationResponse(
       { stdio: "ignore" },
     );
   } catch {
-    throw new AuthenticationError("Could not start the sign-in browser");
+    throw new AuthenticationError(
+      BROWSER_TROUBLE,
+      `Could not start the sign-in browser: ${browser}`,
+    );
   }
   let gone = false;
   child.on("error", () => {
@@ -370,12 +473,20 @@ async function captureAuthorizationResponse(
     child.kill("SIGKILL");
     await waitForExit(child, 5_000);
   };
+  // An aborted sign-in closes Edge at once, so Connect can be clicked again.
+  const onAbort = (): void => {
+    void terminate();
+  };
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const launchDeadline = performance.now() + 20_000;
     let debuggerUrl: string | null = null;
     while (true) {
       if (exited()) {
-        throw new AuthenticationError("Browser closed before Microsoft sign-in started");
+        throw new AuthenticationError(
+          BROWSER_CLOSED,
+          "Browser closed before Microsoft sign-in started",
+        );
       }
       try {
         const response = await fetch(`http://127.0.0.1:${port}/json/version`, {
@@ -384,13 +495,11 @@ async function captureAuthorizationResponse(
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
-        const info: unknown = await response.json();
-        if (info === null || typeof info !== "object" || Array.isArray(info)) {
+        const info = asRecord(await response.json());
+        if (info === null) {
           throw new Error("Not a JSON object");
         }
-        const webSocketDebuggerUrl = (info as Record<string, unknown>)[
-          "webSocketDebuggerUrl"
-        ];
+        const webSocketDebuggerUrl = info["webSocketDebuggerUrl"];
         if (typeof webSocketDebuggerUrl !== "string") {
           throw new Error("Missing webSocketDebuggerUrl");
         }
@@ -398,7 +507,10 @@ async function captureAuthorizationResponse(
         break;
       } catch {
         if (performance.now() >= launchDeadline) {
-          throw new AuthenticationError("Timed out starting the sign-in browser");
+          throw new AuthenticationError(
+            BROWSER_TROUBLE,
+            "Timed out starting the sign-in browser (20 s)",
+          );
         }
         await new Promise<void>((resolve) => {
           setTimeout(resolve, 100);
@@ -421,7 +533,10 @@ async function captureAuthorizationResponse(
       );
       const targetId = target["targetId"];
       if (typeof targetId !== "string") {
-        throw new AuthenticationError("Browser authorization setup failed");
+        throw new AuthenticationError(
+          BROWSER_TROUBLE,
+          "Browser authorization setup failed: Target.createTarget returned no targetId",
+        );
       }
       const attached = await cdpCall(
         socket,
@@ -433,7 +548,10 @@ async function captureAuthorizationResponse(
       );
       const sessionId = attached["sessionId"];
       if (typeof sessionId !== "string") {
-        throw new AuthenticationError("Browser authorization setup failed");
+        throw new AuthenticationError(
+          BROWSER_TROUBLE,
+          "Browser authorization setup failed: Target.attachToTarget returned no sessionId",
+        );
       }
       await cdpCall(socket, counter, "Network.enable", {}, sessionId, events);
       await cdpCall(socket, counter, "Page.enable", {}, sessionId, events);
@@ -443,20 +561,29 @@ async function captureAuthorizationResponse(
         if (events.length > 0) {
           const response = events.shift();
           if (response === undefined) {
-            throw new AuthenticationError("Timed out waiting for Microsoft sign-in");
+            throw new AuthenticationError(
+              SIGN_IN_TIMED_OUT,
+              "Timed out waiting for Microsoft sign-in (300 s)",
+            );
           }
           return response;
         }
         const remaining = deadline - performance.now();
         if (remaining <= 0) {
-          throw new AuthenticationError("Timed out waiting for Microsoft sign-in");
+          throw new AuthenticationError(
+            SIGN_IN_TIMED_OUT,
+            "Timed out waiting for Microsoft sign-in (300 s)",
+          );
         }
         let message: CdpMessage;
         try {
           message = await socket.recv(remaining);
         } catch (error) {
           if (error instanceof WebSocketTimeout) {
-            throw new AuthenticationError("Timed out waiting for Microsoft sign-in");
+            throw new AuthenticationError(
+              SIGN_IN_TIMED_OUT,
+              "Timed out waiting for Microsoft sign-in (300 s)",
+            );
           }
           throw error;
         }
@@ -474,6 +601,7 @@ async function captureAuthorizationResponse(
       socket.close();
     }
   } finally {
+    signal?.removeEventListener("abort", onAbort);
     await terminate();
   }
 }
@@ -527,22 +655,25 @@ export async function tokenRequest(
     signal: AbortSignal.timeout(30_000),
   });
   const text = await response.text();
-  let decoded = true;
-  let parsed: unknown = null;
+  let record: Record<string, unknown> | null = null;
   try {
-    parsed = JSON.parse(text);
+    record = asRecord(JSON.parse(text));
   } catch {
-    decoded = false;
+    record = null;
   }
-  if (!decoded || parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+  if (record === null) {
     if (!response.ok) {
       throw new AuthenticationError(
+        "Microsoft's sign-in service could not be reached. Check your internet connection, then click Connect again.",
         `Microsoft token request failed: HTTP ${response.status}`,
       );
     }
-    throw new Error("Microsoft token endpoint returned an unreadable response");
+    throw new AuthenticationError(
+      "Microsoft's sign-in service sent an unexpected reply. Click Connect to try again.",
+      "Microsoft token endpoint returned an unreadable response",
+    );
   }
-  return parsed as Record<string, unknown>;
+  return record;
 }
 
 
@@ -556,6 +687,16 @@ function errorText(result: Record<string, unknown>): string {
     return error;
   }
   return "Microsoft sign-in did not return an access token";
+}
+
+/**
+ * The sign-in failure for one token response: the OAuth code picks the plain
+ * text, and the raw description (with its AADSTS code) rides along as `detail`.
+ */
+function tokenResultError(result: Record<string, unknown>): AuthenticationError {
+  const code = result["error"];
+  const mapped = typeof code === "string" ? OAUTH_ERROR_TEXT[code] : undefined;
+  return new AuthenticationError(mapped ?? SIGN_IN_FAILED, errorText(result));
 }
 
 
@@ -575,10 +716,10 @@ export function preferredUsername(result: Record<string, unknown>): string | nul
   } catch {
     return null;
   }
-  if (claims === null || typeof claims !== "object" || Array.isArray(claims)) {
+  const record = asRecord(claims);
+  if (record === null) {
     return null;
   }
-  const record = claims as Record<string, unknown>;
   for (const name of ["preferred_username", "upn", "email", "name"]) {
     const value = record[name];
     if (typeof value === "string" && value) {
@@ -610,6 +751,39 @@ function accessEntry(
   return { token, expiresAt };
 }
 
+/**
+ * The JSON token cache. The host app points `M365_CACHE_FILE` at its own userData
+ * folder; otherwise the per-user application-data folder is used.
+ */
+export function tokenCacheFile(): string {
+  const override = process.env["M365_CACHE_FILE"];
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
+  return join(process.env["LOCALAPPDATA"] ?? homedir(), "M365CopilotProxy", "token-cache.json");
+}
+
+/**
+ * The sign-in browser's dedicated profile. It persists on purpose: Microsoft's
+ * session cookies live here, so a repeat sign-in (after the token cache expired
+ * or was revoked) completes without asking again. Kept beside the token cache —
+ * `M365_PROFILE_DIR` overrides it — so both move with the host app's userData.
+ */
+function signInProfileDir(): string {
+  const override = process.env["M365_PROFILE_DIR"];
+  if (override !== undefined && override.length > 0) {
+    return override;
+  }
+  return join(dirname(tokenCacheFile()), "browser-profile");
+}
+
+/**
+ * Every provider that has read the cache, so `signOut()` can clear the in-memory
+ * copies too. Without this the running proxy keeps answering with the tokens it
+ * already loaded and Sign out does nothing until pi restarts.
+ */
+const liveProviders = new Set<FileTokenProvider>();
+
 /** Caches one refresh token plus per-scope access tokens in a JSON file. */
 export class FileTokenProvider {
   private cachePath = "";
@@ -625,10 +799,16 @@ export class FileTokenProvider {
   }
 
   private async initialize(): Promise<void> {
-    const root = join(process.env["LOCALAPPDATA"] ?? homedir(), "M365CopilotProxy");
-    await mkdir(root, { recursive: true });
-    this.cachePath = process.env["M365_CACHE_FILE"] ?? join(root, "token-cache.json");
+    this.cachePath = tokenCacheFile();
+    await mkdir(dirname(this.cachePath), { recursive: true });
+    liveProviders.add(this);
     this.cache = await this.load();
+  }
+
+  /** Forgets the cached tokens so the next call re-reads (a now empty) disk. */
+  forget(): void {
+    this.initialized = null;
+    this.cache = {};
   }
 
   private async load(): Promise<Record<string, unknown>> {
@@ -644,10 +824,7 @@ export class FileTokenProvider {
     } catch {
       return {};
     }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {};
-    }
-    return parsed as Record<string, unknown>;
+    return asRecord(parsed) ?? {};
   }
 
   private async save(): Promise<void> {
@@ -655,8 +832,11 @@ export class FileTokenProvider {
       await mkdir(dirname(this.cachePath), { recursive: true });
       await writeFile(this.cachePath, JSON.stringify(this.cache), "utf8");
     } catch (error) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new AuthenticationError(`Could not write the token cache: ${detail}`);
+      const detail = messageOf(error);
+      throw new AuthenticationError(
+        "pi could not save your Microsoft 365 sign-in. Ask your IT team to check that the app folder is writable.",
+        `Could not write the token cache: ${detail}`,
+      );
     }
   }
 
@@ -670,12 +850,11 @@ export class FileTokenProvider {
     if (username) {
       this.cache["username"] = username;
     }
-    let access = this.cache["access"];
-    if (access === null || typeof access !== "object" || Array.isArray(access)) {
-      access = {};
-      this.cache["access"] = access;
+    let entries = asRecord(this.cache["access"]);
+    if (entries === null) {
+      entries = {};
+      this.cache["access"] = entries;
     }
-    const entries = access as Record<string, unknown>;
     const accessToken = result["access_token"];
     if (typeof accessToken === "string") {
       const expiresIn = result["expires_in"];
@@ -713,47 +892,53 @@ export class FileTokenProvider {
     }
   }
 
-  private async interactive(scopes: readonly string[]): Promise<Record<string, unknown>> {
+  private async interactive(
+    scopes: readonly string[],
+    signal?: AbortSignal,
+  ): Promise<Record<string, unknown>> {
     const hasAccount = Boolean(this.cache["refresh_token"]);
     const [verifier, challenge] = pkce();
     const state = randomBytes(16).toString("base64url");
     const authUri = authorizeUrl(scopes, challenge, state, hasAccount ? null : "select_account");
     console.log("Complete Microsoft sign-in in the opened browser window.");
-    const profileDir = await mkdtemp(join(tmpdir(), "m365-copilot-auth-"));
-    let authResponse: AuthorizationResponse;
-    try {
-      authResponse = await captureAuthorizationResponse(authUri, profileDir);
-    } finally {
-      try {
-        await rm(profileDir, { recursive: true, force: true });
-      } catch {
-        // The profile directory is disposable; ignore cleanup failures.
-      }
+    // A persistent profile is the point: Edge keeps the Microsoft cookies, so the
+    // next Connect (after a revoked token, say) completes without asking again.
+    const profileDir = signInProfileDir();
+    await mkdir(profileDir, { recursive: true });
+    const authResponse = await raceAbort(
+      captureAuthorizationResponse(authUri, profileDir, signal),
+      signal,
+    );
+    if (signal?.aborted) {
+      throw abortError();
     }
     if ("error" in authResponse) {
-      throw new AuthenticationError(`Microsoft sign-in failed: ${authResponse.error}`);
+      throw new AuthenticationError(
+        OAUTH_ERROR_TEXT[authResponse.error] ?? SIGN_IN_FAILED,
+        `Microsoft sign-in failed: ${authResponse.error}`,
+      );
     }
     if (authResponse.state !== state) {
-      throw new AuthenticationError("Microsoft sign-in returned an unexpected state");
+      throw new AuthenticationError(
+        "Microsoft sign-in could not be verified. Click Connect to try again.",
+        "Microsoft sign-in returned an unexpected state",
+      );
     }
-    const result = await tokenRequest({
-      client_id: CLIENT_ID,
-      grant_type: "authorization_code",
-      code: authResponse.code,
-      redirect_uri: REDIRECT_URI,
-      code_verifier: verifier,
-      scope: scopes.join(" "),
-    });
+    const result = await raceAbort(
+      tokenRequest({
+        client_id: CLIENT_ID,
+        grant_type: "authorization_code",
+        code: authResponse.code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: verifier,
+        scope: scopes.join(" "),
+      }),
+      signal,
+    );
     if (typeof result["access_token"] !== "string") {
-      throw new AuthenticationError(errorText(result));
+      throw tokenResultError(result);
     }
     return result;
-  }
-
-  async username(): Promise<string | null> {
-    await this.ready();
-    const value = this.cache["username"];
-    return typeof value === "string" ? value : null;
   }
 
   /**
@@ -762,6 +947,7 @@ export class FileTokenProvider {
    */
   async tokenStatus(scopes: readonly string[] = CHAT_SCOPES): Promise<{
     readonly valid: boolean;
+    readonly refreshable: boolean;
     readonly secondsRemaining: number | null;
     readonly username: string | null;
   }> {
@@ -771,8 +957,12 @@ export class FileTokenProvider {
     const cache = await this.load();
     const entry = accessEntry(cache, scopeKey(scopes));
     const username: unknown = cache["username"];
+    // A refresh token on disk means the next request can silently refresh, even
+    // while the cached access token's own window is nearly up.
+    const refresh = cache["refresh_token"];
     return {
       valid: entry !== null && entry.expiresAt > Date.now() / 1000 + 60,
+      refreshable: typeof refresh === "string" && refresh.length > 0,
       secondsRemaining:
         entry === null ? null : Math.max(0, Math.floor(entry.expiresAt - Date.now() / 1000)),
       username: typeof username === "string" ? username : null,
@@ -793,7 +983,16 @@ export class FileTokenProvider {
     }
   }
 
-  async token(scopes: readonly string[] = CHAT_SCOPES, interactive = true): Promise<string> {
+  /**
+   * A usable access token. `interactive` decides what happens without one: a chat
+   * request passes `false` so it can never open a browser mid-turn, while Connect
+   * passes `true` to run the sign-in.
+   */
+  async token(
+    scopes: readonly string[] = CHAT_SCOPES,
+    interactive = true,
+    signal?: AbortSignal,
+  ): Promise<string> {
     return this.withLock(async () => {
       await this.ready();
       const key = scopeKey(scopes);
@@ -808,36 +1007,53 @@ export class FileTokenProvider {
       }
       const refresh = this.cache["refresh_token"];
       if (typeof refresh === "string" && refresh) {
-        const result = await tokenRequest({
+        const refreshed = await tokenRequest({
           client_id: CLIENT_ID,
           grant_type: "refresh_token",
           refresh_token: refresh,
           scope: scopes.join(" "),
         });
-        const accessToken = result["access_token"];
+        const accessToken = refreshed["access_token"];
         if (typeof accessToken === "string") {
-          await this.store(result, key);
+          await this.store(refreshed, key);
           return accessToken;
         }
+        // The refresh token was revoked or expired; only a sign-in can fix it.
+        if (!interactive) {
+          throw tokenResultError(refreshed);
+        }
+      } else if (!interactive) {
+        throw new AuthenticationError(SIGN_IN_REQUIRED, "No cached sign-in on disk to refresh");
       }
-      if (!interactive) {
-        throw new AuthenticationError("No cached Microsoft sign-in for these permissions");
-      }
-      const result = await this.interactive(scopes);
+      const result = await this.interactive(scopes, signal);
       await this.store(result, key);
       const accessToken = result["access_token"];
       if (typeof accessToken !== "string") {
-        throw new AuthenticationError(errorText(result));
+        throw tokenResultError(result);
       }
       return accessToken;
     });
   }
 }
 
-
-export async function login(): Promise<string> {
+/**
+ * Signs in, opening the sign-in browser when Microsoft needs it. Matches the
+ * Python proxy's `login`; the caller only cares that it finishes or rejects.
+ */
+export async function login(options?: { readonly signal?: AbortSignal }): Promise<void> {
   const provider = new FileTokenProvider();
-  await provider.token(CHAT_SCOPES, true);
-  const username = await provider.username();
-  return username ? username : "Microsoft account";
+  await provider.token(CHAT_SCOPES, true, options?.signal);
+}
+
+/**
+ * Signs out everywhere: the cached tokens, the cache file, and the dedicated
+ * Edge profile whose cookies would otherwise sign the same account straight back
+ * in. Live providers forget their copies so the running proxy stops answering.
+ */
+export async function signOut(): Promise<void> {
+  for (const provider of liveProviders) {
+    provider.forget();
+  }
+  await rm(tokenCacheFile(), { force: true });
+  await rm(signInProfileDir(), { recursive: true, force: true });
 }

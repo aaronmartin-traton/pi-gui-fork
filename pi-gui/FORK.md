@@ -13,14 +13,29 @@ people who are not technical.
 
 ## For coworkers
 
-1. Install the app (the `pi-gui-Setup-*.exe` someone shares with you). The Copilot
+1. Install the app (the `pi-gui-<version>-x64-setup.exe` someone shares with you). The Copilot
    proxy is built into the app, so there is nothing else to install — no Python, no
    `pip`, no admin rights.
+   **If Windows shows "Windows protected your PC"**, choose **More info → Run anyway**: the
+   installer is not code-signed. If a message says your organization blocked the app, ask IT to
+   allow it.
 2. Open the app, pick a folder, and click **Connect Microsoft 365 Copilot** on the banner
    (or Settings → Microsoft 365 Copilot → **Connect**).
-3. An Edge window opens. Sign in with your normal work account. The status turns
-   **Connected** and new threads use Copilot.
+3. An Edge window opens. Sign in with your normal work account. Finishing the sign-in can take a
+   minute or two — the status says **Signing in** while that window is open — and then turns
+   **Connected**. The sign-in refreshes itself, so this is a one-time step.
 4. Start from one of the suggestions under the message box, or just ask.
+
+If something goes wrong, the status line under **Settings → Microsoft 365 Copilot** says what to
+do. The common ones:
+
+| What you see | What to do |
+| --- | --- |
+| "Click Connect, then sign in …" | Click **Connect**; the Edge window opens again. |
+| "Port 8000 is already in use" | Another program (or a second copy of pi) holds the port. Close it and click **Connect** again. |
+| "Your Microsoft 365 sign-in expired" | Settings → Microsoft 365 Copilot → **Connect**. |
+| "Copilot is busy" or a throttle message | Wait about a minute and send the message again. |
+| Copilot stops answering in new threads | Microsoft limits how many conversations you may start. Keep working in the same thread instead of starting a new one. |
 
 pi asks before it edits a file or runs a command (**Ask before changes**). Turn that off in
 Settings → Skills and extensions if you prefer.
@@ -37,18 +52,20 @@ Settings → Skills and extensions if you prefer.
   Edge profile, the same way the Copilot web app does.
 - `electron/platform/m365-copilot.ts` starts the proxy as an `node:http` server bound to
   127.0.0.1 inside the app, keeps its token file under the app's userData folder,
-  health-checks `/healthz`, shows plain-language states (starting, waiting for sign-in,
-  connected, port busy), and stops it on quit. A proxy you already run is detected and reused.
+  health-checks `/healthz`, reports plain-language states (starting, waiting for sign-in,
+  signing in, connected, port busy, error) each with a sentence saying what to do, and stops
+  it on quit. A proxy you already run is detected and reused.
 - On **Connect**, the settings page registers pi provider `m365-copilot` (OpenAI-compatible,
   32K context so pi compacts early) and makes it the default model.
 - `PI_GUI_M365_PROXY_URL` points the app at a different proxy, for example
   [cramt/m365-copilot-proxy](https://github.com/cramt/m365-copilot-proxy) on
   `http://127.0.0.1:4141/v1`, which emulates tool calling.
 
-**Limitation:** M365 Copilot has no native tool calling. With the bundled proxy, Copilot
-answers and produces rich cards but does not drive pi's file and command tools. For agentic
-work, use cramt's proxy (it needs a TOTP seed or interactive approval and Node 24) or another
-provider in Settings → Providers.
+**Tool calling is prompt-emulated.** M365 Copilot has no native tool-calling API, so the proxy
+teaches it to answer with a fenced ` ```bash ` or ` ```powershell ` block; the proxy routes that
+block to the pi tool whose name it matches, one call per turn. The tool must be in the request's
+tool list and the model must name it exactly. Verified end to end on Windows: Copilot wrote a
+file into the user's Documents folder through a fenced PowerShell call.
 
 ### Generative UI: OpenUI
 
@@ -140,11 +157,22 @@ side. Two causes:
   `side-panel-picker` and `settings-general` fail on keyboard shortcuts and focus in this
   environment.
 
-## Not yet verified
+## Windows verification (2026-10-11)
 
-- **Windows.** All checks ran on Linux under Xvfb. The proxy launch path (`py -3`, Edge sign-in,
-  token capture) and the NSIS installer were not run on Windows here. Use the repo's
-  `testing-windows-desktop` skill or the `desktop-package-windows` CI job once this folder is its
-  own repository. GitHub only runs workflows from a repository's root `.github`.
-- **A real Copilot conversation.** The proxy was started and probed locally (health, models,
-  token state), but no M365 account was available to sign in.
+Run on a Windows 11 Enterprise VM, signed in with a real work account:
+
+- The NSIS installer built by `pnpm --filter @pi-gui/desktop run package:win` installs, and the
+  installed app launches.
+- Settings → Microsoft 365 Copilot → **Connect** starts the in-app proxy and opens Edge; finishing
+  the sign-in turns the status to **Connected** and shows the account and the minutes left on the
+  token.
+- A real conversation ran and Copilot **wrote a file into the user's Documents folder** through a
+  fenced PowerShell tool call — the end-to-end proof that the built-in proxy drives pi's tools.
+- Found and fixed by that run: the proxy read its token cache once and never re-read it, so a
+  finished sign-in left the app on "Connecting…" forever. `FileTokenProvider` now re-reads the
+  file, and a sign-in that fails reports why instead of polling.
+
+Still open: the same path on an organization-managed PC with SmartScreen/AppLocker policy, and a
+throttle/quota/disengage recovery run. CI note: GitHub only runs workflows from a repository's root
+`.github`, so these workflows run only once this folder is its own repository — the `pi-gui/`
+subdirectory's `.github/workflows` are inert while the fork's root has no `.github`.

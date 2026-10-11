@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 
 import { InvalidRequestError, UpstreamError } from "./types.js";
+import { asRecord, isRecord, messageOf } from "./guards.js";
 import { tokenClaims, UPLOAD_OPTIONS_SETS } from "./m365.js";
 
 const maxImageBytesEnv = process.env.M365_IMAGE_MAX_BYTES;
@@ -56,7 +57,7 @@ export async function fetchUrl(url: string): Promise<readonly [string, Uint8Arra
   try {
     response = await fetch(url);
   } catch (error) {
-    throw new InvalidRequestError(`could not fetch image: ${error instanceof Error ? error.message : String(error)}`);
+    throw new InvalidRequestError(`could not fetch image: ${messageOf(error)}`);
   }
   if (!response.ok) {
     throw new InvalidRequestError(`could not fetch image: HTTP ${response.status}`);
@@ -104,16 +105,12 @@ export async function imagesFromMessages(messages: readonly Record<string, unkno
       continue;
     }
     for (const part of content as readonly unknown[]) {
-      if (typeof part !== "object" || part === null) {
+      if (!isRecord(part) || part["type"] !== "image_url") {
         continue;
       }
-      const record = part as Record<string, unknown>;
-      if (record["type"] !== "image_url") {
-        continue;
-      }
-      const image_url = record["image_url"];
+      const image_url = part["image_url"];
       let url: unknown;
-      if (typeof image_url === "object" && image_url !== null && "url" in image_url) {
+      if (isRecord(image_url) && "url" in image_url) {
         url = image_url.url;
       }
       if (typeof url !== "string" || url === "") {
@@ -208,11 +205,11 @@ export async function upload(
   } catch {
     throw new UpstreamError("M365 image upload returned invalid JSON");
   }
-  const payload = typeof parsed === "object" && parsed !== null ? (parsed as Record<string, unknown>) : {};
+  const payload = asRecord(parsed) ?? {};
   const doc_id = payload["docId"];
   const result = payload["result"];
   let result_value: unknown;
-  if (typeof result === "object" && result !== null && "value" in result) {
+  if (isRecord(result) && "value" in result) {
     result_value = result.value;
   }
   if (result_value !== "Success" || typeof doc_id !== "string" || doc_id === "") {
