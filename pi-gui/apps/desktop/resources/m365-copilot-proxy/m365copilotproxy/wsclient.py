@@ -288,6 +288,7 @@ class WebSocketServerConnection(_Transport):
 
     def __init__(self, sock: socket.socket):
         super().__init__(sock, mask_outbound=False)
+        self.request_path = "/"
 
     @classmethod
     def accept(cls, sock: socket.socket) -> "WebSocketServerConnection":
@@ -300,8 +301,12 @@ class WebSocketServerConnection(_Transport):
             conn._buf += chunk
         head, _, rest = conn._buf.partition(b"\r\n\r\n")
         conn._buf = rest
+        lines = head.decode("latin-1").split("\r\n")
+        request_line = lines[0].split(" ")
+        if len(request_line) > 1:
+            conn.request_path = request_line[1]
         key = ""
-        for line in head.decode("latin-1").split("\r\n")[1:]:
+        for line in lines[1:]:
             name, _, value = line.partition(":")
             if name.strip().lower() == "sec-websocket-key":
                 key = value.strip()

@@ -48,34 +48,6 @@ def _port() -> int:
         return sock.getsockname()[1]
 
 
-def _request_path(sock: socket.socket, timeout: float = 10.0) -> str:
-    """Peek the HTTP Upgrade request without consuming it.
-
-    ``WebSocketServerConnection.accept`` reads the whole handshake and keeps no
-    record of it, so the fake M365 would otherwise lose the request path it
-    reads ``ConversationId``/``scenario`` from. ``MSG_PEEK`` leaves the bytes
-    queued, so ``accept`` still sees the complete request.
-    """
-    deadline = time.monotonic() + timeout
-    peeked = b""
-    try:
-        while b"\r\n\r\n" not in peeked:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise WebSocketError("timed out waiting for the WebSocket handshake request")
-            sock.settimeout(min(remaining, 0.5))
-            try:
-                chunk = sock.recv(4096, socket.MSG_PEEK)
-            except TimeoutError:
-                continue
-            if not chunk:
-                raise WebSocketError("connection closed during handshake")
-            peeked += chunk
-    finally:
-        sock.settimeout(None)
-    return peeked.split(b"\r\n", 1)[0].split(b" ")[1].decode("latin-1")
-
-
 def _serve_ws(port: int) -> socket.socket:
     """Serve the fake M365 SignalR endpoint, returning the listening socket.
 
@@ -90,13 +62,12 @@ def _serve_ws(port: int) -> socket.socket:
 
     def worker(sock: socket.socket) -> None:
         try:
-            path = _request_path(sock)
             conn = WebSocketServerConnection.accept(sock)
         except (WebSocketError, OSError):
             sock.close()
             return
         try:
-            _fake_m365(conn, path)
+            _fake_m365(conn, conn.request_path)
         finally:
             conn.close()
 
