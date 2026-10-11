@@ -1058,7 +1058,7 @@ app
         },
         {
           name: "pi-gui-windows-shell",
-          displayName: "PowerShell on Windows",
+          displayName: "Windows shell (PowerShell)",
           description: "Adds pi's PowerShell tool so commands run on Windows",
           factory: createWindowsShellExtension(),
         },

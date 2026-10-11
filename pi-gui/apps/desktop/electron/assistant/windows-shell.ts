@@ -7,6 +7,11 @@ import type { ExtensionAPI, ExtensionFactory } from "@earendil-works/pi-coding-a
  * Windows so fenced tool loops work.
  *
  * Additive on purpose: a new file, so it does not conflict with upstream pi-gui.
+ *
+ * The display name is registered in main.ts as "Windows shell (PowerShell)". Settings →
+ * Skills and extensions lists built-ins by display name and shows only the first six of a
+ * group until you expand it, so a name that sorted earlier would push an existing built-in
+ * out of the collapsed view (and out of the upstream spec that asserts it is there).
  */
 export function createWindowsShellExtension(
   platform: NodeJS.Platform = process.platform,
