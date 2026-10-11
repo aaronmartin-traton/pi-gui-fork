@@ -120,14 +120,23 @@ scripted tools keep running unattended. A spec opts in with `PI_GUI_ASK_BEFORE_C
 
 ## Verification status
 
-On Linux (Xvfb, Electron 37): format, lint, typecheck, architecture guards (114/114) and desktop
-unit tests (344 + 3 new) all pass. In the full core Electron lane, 277 pass, 6 are skipped and
-the remaining tests split into two groups:
+On Linux (Xvfb, Electron 37): format, lint, typecheck, architecture guards (114/114), the desktop
+unit tests, and the vendored proxy's own end-to-end fixture
+(`pnpm --filter @pi-gui/desktop run verify:m365-proxy`) all pass.
 
-- 10 notification, window-focus and maximize specs fail the same way on the unmodified upstream
-  import in this environment, which has no window manager.
-- `composer-draft-sync` "explicit editor text replacements" failed once under three parallel
-  workers, then passed twice on rerun.
+The full core Electron lane (648 tests) is 634 passed, 6 skipped, 8 failed. None of the failures
+is a regression from this fork's colleague-mode work — a build made before those changes fails the
+same way. Two causes:
+
+- **Missing example bundles (4).** `extension-github-view`, `extension-trace-view`,
+  `extension-usage-view` and `extension-view-links` load `examples/desktop-extensions/<name>`,
+  whose `dist/desktop.js` is a gitignored build artifact that the lane does not build. Build them
+  once first — `pnpm --dir examples/desktop-extensions/github run build` (same for `trace`,
+  `usage`) — and they pass.
+- **Upstream spec drift / Xvfb (3).** `mentions-diff` expects the `@` menu to list "Trim old tool
+  output", but `buildExtensionMentionOptions` caps that list at 8 alphabetically, so the fork's
+  extra built-ins push it out; typing `@trim` still finds it. `composer-controls` and
+  `side-panel-picker` fail on keyboard shortcuts in this environment.
 
 ## Not yet verified
 
