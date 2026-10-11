@@ -8,5 +8,3 @@ test-results
 tmp-chat-selftest.mjs
 tmp-parallel-selftest.mjs
 
-# Bundled CPython, fetched by scripts/fetch-python-runtime.mjs at package time.
-resources/python
