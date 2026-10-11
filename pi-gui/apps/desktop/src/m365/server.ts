@@ -24,8 +24,6 @@ import {
   contentText,
   findShellTool,
   formatDelta,
-  formatMessages,
-  parseToolCalls,
   toolSpec,
 } from "./tooling.js";
 import { asRecord, isRecord } from "./guards.js";
@@ -81,7 +79,17 @@ const PRIORITY_GATES: readonly string[] = [
 ];
 
 /** Minimal provider contract server.py relies on: scoped token acquisition. */
-type TokenSource = { token(scopes?: readonly string[]): Promise<string> };
+type TokenSource = {
+  token(scopes?: readonly string[]): Promise<string>;
+  /** Cache-only state for `/healthz`; must not refresh or prompt. */
+  tokenStatus(scopes?: readonly string[]): Promise<TokenStatus>;
+};
+
+export interface TokenStatus {
+  readonly valid: boolean;
+  readonly secondsRemaining: number | null;
+  readonly username: string | null;
+}
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -421,6 +429,31 @@ export class ProxyApplication {
       }
       throw error;
     }
+  }
+
+  /**
+   * Cache-only token state for the connector's status probe. Never refreshes and
+   * never opens a browser — `/healthz` is polled every couple of seconds.
+   */
+  async health(): Promise<{
+    readonly token: {
+      readonly valid: boolean;
+      readonly seconds_remaining: number | null;
+      readonly username: string | null;
+    };
+  }> {
+    if (nonEmptyEnv("M365_TEST_ACCESS_TOKEN") !== null) {
+      return { token: { valid: true, seconds_remaining: null, username: null } };
+    }
+    const provider = this.tokenProvider ?? (this.tokenProvider = new this.auth.FileTokenProvider());
+    const status: TokenStatus = await provider.tokenStatus();
+    return {
+      token: {
+        valid: status.valid,
+        seconds_remaining: status.secondsRemaining,
+        username: status.username,
+      },
+    };
   }
 
   private async agentFor(model: string, hasTools: boolean): Promise<string | null> {
@@ -1664,6 +1697,8 @@ async function handleRequest(
     if (method === "GET") {
       if (path === "/v1/models") {
         sendJson(res, 200, app.models());
+      } else if (path === "/healthz") {
+        sendJson(res, 200, await app.health());
       } else {
         sendJson(res, 404, NOT_FOUND_BODY);
       }

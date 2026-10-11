@@ -54,11 +54,12 @@ export function SettingsM365CopilotSection({
       if (registeringRef.current) return;
       registeringRef.current = true;
       try {
+        const modelIds = ready.models?.length ? ready.models : [ready.modelId];
         const error = await onSaveCustomProvider({
           providerId: ready.providerId,
           baseUrl: ready.baseUrl,
           apiKey: "m365-local-proxy",
-          models: [{ id: ready.modelId, contextWindow: ready.contextWindow }],
+          models: modelIds.map((id) => ({ id, contextWindow: ready.contextWindow })),
         });
         if (error) {
           setSetupError(error);
@@ -135,7 +136,7 @@ export function SettingsM365CopilotSection({
             <div className="settings-row__description">
               {state === "ready"
                 ? isDefault
-                  ? "New threads use Microsoft 365 Copilot."
+                  ? `New threads use Microsoft 365 Copilot${status?.account ? ` as ${status.account}` : ""}.`
                   : "Copilot is connected but is not the default model yet."
                 : (status?.detail ?? "Click Connect to sign in and start using Copilot.")}
               {state === "ready" && status?.minutesLeft !== undefined

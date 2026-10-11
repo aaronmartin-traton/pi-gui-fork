@@ -6,6 +6,8 @@ import {
   M365_COPILOT_MODEL_ID,
   M365_COPILOT_PROVIDER_ID,
 } from "../../contracts/ipc";
+import { login } from "../../src/m365/auth.js";
+import { modelsResponse } from "../../src/m365/catalog.js";
 import { createHttpServer } from "../../src/m365/server.js";
 
 /**
@@ -37,6 +39,7 @@ export interface M365CopilotConnectorOptions {
 export class M365CopilotConnector {
   private server: Server | undefined;
   private starting: Promise<M365CopilotStatus> | undefined;
+  private signingIn: Promise<void> | undefined;
   private generation = 0;
   readonly baseUrl: string;
 
@@ -45,6 +48,7 @@ export class M365CopilotConnector {
   }
 
   async status(): Promise<M365CopilotStatus> {
+    const health = await this.probe();
     const base = {
       baseUrl: this.baseUrl,
       providerId: M365_COPILOT_PROVIDER_ID,
@@ -52,8 +56,13 @@ export class M365CopilotConnector {
       contextWindow: M365_COPILOT_CONTEXT_WINDOW,
       // Only a proxy this connector started is stopped on quit; an external one is left alone.
       managed: this.server !== undefined,
+      // The proxy maps model ids to M365 tones/scenarios; register the whole catalog
+      // so the picker offers them instead of the single "m365-copilot" alias.
+      models: modelsResponse().data.map((model) => model.id),
+      ...(health.kind === "token" && health.account !== undefined
+        ? { account: health.account }
+        : {}),
     };
-    const health = await this.probe();
     if (health.kind === "token") {
       return health.valid
         ? {
@@ -106,7 +115,26 @@ export class M365CopilotConnector {
     if (generation !== this.generation && !this.server) {
       return this.status();
     }
-    return this.status();
+    const status = await this.status();
+    if (status.state === "waiting-for-sign-in") {
+      this.beginSignIn();
+    }
+    return status;
+  }
+
+  /**
+   * Opens Edge to sign the account in. Connect must not block on it: the renderer
+   * polls the status until the token lands.
+   */
+  private beginSignIn(): void {
+    this.signingIn ??= login()
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        console.error("[m365] Microsoft sign-in failed", error);
+      })
+      .finally(() => {
+        this.signingIn = undefined;
+      });
   }
 
   stop(): void {
@@ -117,7 +145,12 @@ export class M365CopilotConnector {
   }
 
   private async probe(): Promise<
-    | { readonly kind: "token"; readonly valid: boolean; readonly minutesLeft?: number }
+    | {
+        readonly kind: "token";
+        readonly valid: boolean;
+        readonly minutesLeft?: number;
+        readonly account?: string;
+      }
     | { readonly kind: "openai" }
     | { readonly kind: "none" }
   > {
@@ -126,21 +159,16 @@ export class M365CopilotConnector {
       // Plain fetch, not Electron's net: loopback traffic must not go through a corporate proxy.
       const response = await fetch(`${origin}/healthz`, { signal: AbortSignal.timeout(1500) });
       if (response.ok) {
-        try {
-          const body = (await response.json()) as {
-            token?: { valid?: unknown; seconds_remaining?: unknown };
-          };
-          const seconds =
-            typeof body.token?.seconds_remaining === "number"
-              ? body.token.seconds_remaining
-              : undefined;
+        const token = tokenState(await response.json());
+        if (token !== null) {
           return {
             kind: "token",
-            valid: body.token?.valid === true,
-            ...(seconds !== undefined ? { minutesLeft: Math.floor(seconds / 60) } : {}),
+            valid: token.valid,
+            ...(token.secondsRemaining !== null
+              ? { minutesLeft: Math.floor(token.secondsRemaining / 60) }
+              : {}),
+            ...(token.username !== null ? { account: token.username } : {}),
           };
-        } catch {
-          // A non-JSON /healthz: fall through to the /models check below.
         }
       } else {
         await response.body?.cancel();
@@ -156,6 +184,29 @@ export class M365CopilotConnector {
       return { kind: "none" };
     }
   }
+}
+
+/** Reads `{ token: { valid, seconds_remaining, username } }` from a `/healthz` body. */
+function tokenState(body: unknown): {
+  readonly valid: boolean;
+  readonly secondsRemaining: number | null;
+  readonly username: string | null;
+} | null {
+  if (typeof body !== "object" || body === null || !("token" in body)) {
+    return null;
+  }
+  const token: unknown = body.token;
+  if (typeof token !== "object" || token === null) {
+    return null;
+  }
+  const valid = "valid" in token && token.valid === true;
+  const secondsRemaining =
+    "seconds_remaining" in token && typeof token.seconds_remaining === "number"
+      ? token.seconds_remaining
+      : null;
+  const username =
+    "username" in token && typeof token.username === "string" ? token.username : null;
+  return { valid, secondsRemaining, username };
 }
 
 /** Resolves once `listening` fires, or rejects on the first socket error. */

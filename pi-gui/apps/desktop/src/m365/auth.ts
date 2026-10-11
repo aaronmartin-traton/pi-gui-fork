@@ -11,6 +11,8 @@ import { createServer } from "node:net";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
+import { asRecord } from "./guards.js";
+
 export const CLIENT_ID = "c0ab8ce9-e9a0-42e7-b064-33d422df41f1";
 export const AUTHORITY = "https://login.microsoftonline.com/common";
 export const AUTHORIZE_ENDPOINT = `${AUTHORITY}/oauth2/v2.0/authorize`;
@@ -670,28 +672,30 @@ export class FileTokenProvider {
     await this.save();
   }
 
+  /** The cached access token for a scope key with its absolute expiry, or null. */
+  private accessEntry(key: string): { readonly token: string; readonly expiresAt: number } | null {
+    const access = asRecord(this.cache["access"]);
+    if (access === null) {
+      return null;
+    }
+    const entry = asRecord(access[key]);
+    if (entry === null) {
+      return null;
+    }
+    const token = entry["token"];
+    const expiresAt = entry["expires_at"];
+    if (typeof token !== "string" || typeof expiresAt !== "number") {
+      return null;
+    }
+    return { token, expiresAt };
+  }
+
   private cached(key: string): string | null {
-    const access = this.cache["access"];
-    if (access === null || typeof access !== "object" || Array.isArray(access)) {
+    const entry = this.accessEntry(key);
+    if (entry === null) {
       return null;
     }
-    const entry = (access as Record<string, unknown>)[key];
-    if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
-      return null;
-    }
-    const record = entry as Record<string, unknown>;
-    const token = record["token"];
-    const expiresAt = record["expires_at"];
-    if (typeof token !== "string") {
-      return null;
-    }
-    if (typeof expiresAt !== "number") {
-      return null;
-    }
-    if (expiresAt > Date.now() / 1000 + 60) {
-      return token;
-    }
-    return null;
+    return entry.expiresAt > Date.now() / 1000 + 60 ? entry.token : null;
   }
 
   private async interactive(scopes: readonly string[]): Promise<Record<string, unknown>> {
@@ -735,6 +739,26 @@ export class FileTokenProvider {
     await this.ready();
     const value = this.cache["username"];
     return typeof value === "string" ? value : null;
+  }
+
+  /**
+   * Cache-only token state for the `/healthz` probe: never refreshes, never opens
+   * a browser, so a status check cannot start a sign-in.
+   */
+  async tokenStatus(scopes: readonly string[] = CHAT_SCOPES): Promise<{
+    readonly valid: boolean;
+    readonly secondsRemaining: number | null;
+    readonly username: string | null;
+  }> {
+    await this.ready();
+    const entry = this.accessEntry(scopeKey(scopes));
+    const username: unknown = this.cache["username"];
+    return {
+      valid: entry !== null && entry.expiresAt > Date.now() / 1000 + 60,
+      secondsRemaining:
+        entry === null ? null : Math.max(0, Math.floor(entry.expiresAt - Date.now() / 1000)),
+      username: typeof username === "string" ? username : null,
+    };
   }
 
   private async withLock<T>(action: () => Promise<T>): Promise<T> {

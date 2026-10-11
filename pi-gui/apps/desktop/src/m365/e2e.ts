@@ -788,6 +788,15 @@ async function checkModels(base: string): Promise<void> {
     ids.includes("gpt-6.1-sol") && ids.includes("claude-sonnet-5.5"),
     `models list is missing probed aliases: ${ids.join(", ")}`,
   );
+
+  // The connector's status probe reads this: a fixture token counts as signed in.
+  const health = await http("GET", `${base}/healthz`);
+  check(health.status === 200, `GET /healthz returned ${health.status}: ${health.body}`);
+  const healthBody: unknown = JSON.parse(health.body);
+  check(
+    asJson(asJson(healthBody)["token"])["valid"] === true,
+    `/healthz should report the fixture token as valid: ${health.body}`,
+  );
 }
 
 async function checkChatToolLoops(base: string): Promise<ChatLoopBaseline> {

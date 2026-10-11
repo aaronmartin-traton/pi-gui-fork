@@ -90,6 +90,10 @@ export interface M365CopilotStatus {
   readonly managed: boolean;
   /** Minutes left on the captured Copilot token; the proxy refreshes it automatically. */
   readonly minutesLeft?: number;
+  /** The signed-in Microsoft account, when the proxy knows it. */
+  readonly account?: string;
+  /** Model ids the proxy advertises; Connect registers all of them. */
+  readonly models?: readonly string[];
 }
 
 export type CustomProviderProbeResult =
