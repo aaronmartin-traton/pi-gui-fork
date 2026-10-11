@@ -85,7 +85,7 @@ export class M365CopilotConnector {
         ...base,
         state: "python-missing",
         detail:
-          "The Copilot connection needs Python 3.14 or newer. Click Get Python (a free Microsoft Store install, no admin rights needed), then click Connect again.",
+          "The Copilot connection needs Python 3.12 or newer. Click Get Python (a free Microsoft Store install, no admin rights needed), then click Connect again.",
       };
     }
     if (this.lastError) {
@@ -237,12 +237,11 @@ function portFromBaseUrl(baseUrl: string): string {
   }
 }
 
-/** Finds a Python 3.14+ interpreter: the `py` launcher first on Windows, then python/python3. */
+/** Finds a Python 3.12+ interpreter: the `py` launcher first on Windows, then python/python3. */
 async function findPython(platform: NodeJS.Platform): Promise<PythonCommand | null> {
   const candidates: PythonCommand[] =
     platform === "win32"
       ? [
-          { command: "py", prefixArgs: ["-3.14"] },
           { command: "py", prefixArgs: ["-3"] },
           // The Microsoft Store `python.exe` stub shadows the real interpreter on PATH,
           // so also try the well-known install locations directly.
@@ -268,7 +267,6 @@ async function findPython(platform: NodeJS.Platform): Promise<PythonCommand | nu
           { command: "python3", prefixArgs: [] },
         ]
       : [
-          { command: "python3.14", prefixArgs: [] },
           { command: "python3", prefixArgs: [] },
           { command: "python", prefixArgs: [] },
         ];
@@ -284,7 +282,7 @@ function isSupportedPython(candidate: PythonCommand): Promise<boolean> {
   return new Promise((resolve) => {
     execFile(
       candidate.command,
-      [...candidate.prefixArgs, "-c", "import sys; print(int(sys.version_info >= (3, 14)))"],
+      [...candidate.prefixArgs, "-c", "import sys; print(int(sys.version_info >= (3, 12)))"],
       { timeout: 5000, windowsHide: true },
       (error, stdout) => resolve(!error && stdout.trim() === "1"),
     );

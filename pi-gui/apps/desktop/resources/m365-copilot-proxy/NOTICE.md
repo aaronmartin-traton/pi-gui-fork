@@ -18,7 +18,8 @@ folder is the upstream license; the desktop app around it stays MIT.
 
 Runtime dependencies (`requirements.txt`: `msal`, `websockets`, `cryptography`)
 install into `%LOCALAPPDATA%\M365CopilotProxy\Python314\site-packages` via
-`install-deps.ps1`. Python 3.14 or newer is required.
+`install-deps.ps1`. Python **3.12 or newer** is required (3.10/3.11 fail on
+PEP 701 nested-quote f-strings; 3.12–3.14 pass the e2e).
 
 Licensed **MIT**, inherited from
 <https://github.com/cramt/m365-copilot-proxy> (Copyright 2026 Alexandra

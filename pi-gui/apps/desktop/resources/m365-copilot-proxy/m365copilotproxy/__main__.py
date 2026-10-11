@@ -10,8 +10,8 @@ from .server import APPLICATION, ProxyHandler
 
 
 def main() -> int:
-    if sys.version_info < (3, 14):
-        print("Python 3.14 or newer is required", file=sys.stderr)
+    if sys.version_info < (3, 12):
+        print("Python 3.12 or newer is required", file=sys.stderr)
         return 2
     parser = argparse.ArgumentParser(prog="m365copilotproxy")
     parser.add_argument("command", nargs="?", choices=("serve", "login", "e2e"), default="serve")
