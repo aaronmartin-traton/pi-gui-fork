@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Default (for coworkers): checks Microsoft Edge, which is used once to sign in to
-  Copilot. Nothing else is needed - the app carries its own Python.
+  Copilot. Nothing else is needed - the proxy runs inside the app.
 
   -Build (for whoever hands out the app): also installs Node.js LTS, enables pnpm,
   installs dependencies and builds the Windows installer into apps\desktop\release\.
@@ -79,7 +79,7 @@ try {
   pnpm install --frozen-lockfile
 
   Write-Step "Building the Windows installer"
-  # package:win fetches the CPython the installer carries (scripts/fetch-python-runtime.mjs).
+  # package:win builds the NSIS installer; it must run on Windows (makensis/wine).
   pnpm --filter @pi-gui/desktop run package:win
 } finally {
   Pop-Location

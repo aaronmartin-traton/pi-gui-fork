@@ -134,7 +134,6 @@ function _query(
   sessionId: string,
   requestId: string,
   model: string,
-  agentId: string | null,
 ): string {
   const [scenario, licenseType] = routingForModel(model);
   const params: Record<string, string> = {
@@ -359,10 +358,22 @@ function _frameText(data: unknown): string {
   if (typeof data === "string") {
     return data;
   }
-  if (data instanceof ArrayBuffer || ArrayBuffer.isView(data)) {
+  if (data instanceof ArrayBuffer) {
     return new TextDecoder().decode(data);
   }
+  if (ArrayBuffer.isView(data)) {
+    return new TextDecoder().decode(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+  }
   return "";
+}
+
+/** The `message` on a socket error event, when the runtime's event carries one. */
+function _errorMessage(event: unknown): string | undefined {
+  if (typeof event !== "object" || event === null || !("message" in event)) {
+    return undefined;
+  }
+  const message: unknown = event.message;
+  return typeof message === "string" && message.length > 0 ? message : undefined;
 }
 
 /** Opens the Chathub socket, bounding only the opening handshake. */
@@ -373,13 +384,9 @@ async function _connect(uri: string): Promise<WebSocket> {
       detach();
       resolve();
     };
-    const onError = (event: Event): void => {
+    const onError = (event: unknown): void => {
       detach();
-      const message =
-        event instanceof ErrorEvent && event.message
-          ? event.message
-          : "M365 WebSocket connect failed";
-      reject(new Error(message));
+      reject(new Error(_errorMessage(event) ?? "M365 WebSocket connect failed"));
     };
     const onClose = (): void => {
       detach();
@@ -426,7 +433,7 @@ function _messages(ws: WebSocket): FrameStream {
     wake = null;
     resolve?.();
   };
-  const onMessage = (event: MessageEvent<unknown>): void => {
+  const onMessage = (event: { readonly data: unknown }): void => {
     queue.push(_frameText(event.data));
     notify();
   };
@@ -488,7 +495,7 @@ export async function sendTurn(
 ): Promise<TurnResult> {
   const [oid, tid] = tokenClaims(token);
   const requestId = randomUUID();
-  const uri = _query(token, oid, tid, conversationId, sessionId, requestId, model, agentId);
+  const uri = _query(token, oid, tid, conversationId, sessionId, requestId, model);
   const result: TurnResult = {
     text: "",
     result: null,

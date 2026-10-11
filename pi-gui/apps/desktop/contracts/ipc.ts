@@ -90,8 +90,6 @@ export interface M365CopilotStatus {
   readonly managed: boolean;
   /** Minutes left on the captured Copilot token; the proxy refreshes it automatically. */
   readonly minutesLeft?: number;
-  /** Last lines of proxy output, only after a failure. */
-  readonly log?: readonly string[];
 }
 
 export type CustomProviderProbeResult =

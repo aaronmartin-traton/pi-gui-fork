@@ -782,6 +782,7 @@ async function checkModels(base: string): Promise<void> {
   const response = await http("GET", `${base}/v1/models`);
   check(response.status === 200, `GET /v1/models returned ${response.status}: ${response.body}`);
   const catalog: unknown = JSON.parse(response.body);
+  same(asJson(catalog)["data"], catalogModule.modelsResponse().data, "models list");
   const ids = asList(asJson(catalog)["data"]).map((entry) => asText(asJson(entry)["id"]));
   check(
     ids.includes("gpt-6.1-sol") && ids.includes("claude-sonnet-5.5"),

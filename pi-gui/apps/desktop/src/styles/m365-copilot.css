@@ -22,21 +22,9 @@
   color: var(--text-strong);
 }
 
-.m365-status--error,
-.m365-status--python-missing {
+.m365-status--error {
   background: color-mix(in srgb, var(--error) 14%, transparent);
   color: var(--text-strong);
-}
-
-.m365-log {
-  width: 100%;
-  max-height: 160px;
-  margin: 0;
-  overflow: auto;
-  color: var(--muted-strong);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  white-space: pre-wrap;
 }
 
 /* Settings rows draw buttons as quiet pills; Connect is the page's one main action. */

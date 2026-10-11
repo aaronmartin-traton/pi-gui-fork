@@ -1,6 +1,5 @@
 import { type Server } from "node:http";
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import type { M365CopilotStatus } from "../../contracts/ipc";
 import {
   M365_COPILOT_CONTEXT_WINDOW,
@@ -27,7 +26,6 @@ import { createHttpServer } from "../../src/m365/server.js";
  */
 
 const DEFAULT_PORT = 8000;
-const LOG_LINES = 40;
 
 export interface M365CopilotConnectorOptions {
   /** Writable folder for the proxy's token cache. */
@@ -39,9 +37,7 @@ export interface M365CopilotConnectorOptions {
 export class M365CopilotConnector {
   private server: Server | undefined;
   private starting: Promise<M365CopilotStatus> | undefined;
-  private lastError: string | undefined;
   private generation = 0;
-  private readonly log: string[] = [];
   readonly baseUrl: string;
 
   constructor(private readonly options: M365CopilotConnectorOptions) {
@@ -54,6 +50,8 @@ export class M365CopilotConnector {
       providerId: M365_COPILOT_PROVIDER_ID,
       modelId: M365_COPILOT_MODEL_ID,
       contextWindow: M365_COPILOT_CONTEXT_WINDOW,
+      // Only a proxy this connector started is stopped on quit; an external one is left alone.
+      managed: this.server !== undefined,
     };
     const health = await this.probe();
     if (health.kind === "token") {
@@ -89,7 +87,6 @@ export class M365CopilotConnector {
     if (current.kind !== "none" || this.server) {
       return this.status();
     }
-    this.lastError = undefined;
     await mkdir(this.options.dataDir, { recursive: true });
     const generation = this.generation;
     if (generation !== this.generation) {
@@ -168,10 +165,11 @@ function onError(server: Server, reject: (reason: unknown) => void): void {
   server.once("listening", () => server.removeListener("error", onErr));
 }
 
-function portFromBaseUrl(baseUrl: string): string {
+function portFromBaseUrl(baseUrl: string): number {
   try {
-    return new URL(baseUrl).port || String(DEFAULT_PORT);
+    const port = Number(new URL(baseUrl).port);
+    return Number.isInteger(port) && port > 0 ? port : DEFAULT_PORT;
   } catch {
-    return String(DEFAULT_PORT);
+    return DEFAULT_PORT;
   }
 }

@@ -183,11 +183,7 @@ export function SettingsM365CopilotSection({
             ) : null}
           </div>
         </div>
-        {status?.log?.length ? (
-          <div className="settings-row">
-            <pre className="m365-log">{status.log.join("\n")}</pre>
-          </div>
-        ) : null}
-      </div>    </section>
+      </div>
+    </section>
   );
 }
