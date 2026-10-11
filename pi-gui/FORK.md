@@ -124,19 +124,21 @@ On Linux (Xvfb, Electron 37): format, lint, typecheck, architecture guards (114/
 unit tests, and the vendored proxy's own end-to-end fixture
 (`pnpm --filter @pi-gui/desktop run verify:m365-proxy`) all pass.
 
-The full core Electron lane (648 tests) is 634 passed, 6 skipped, 8 failed. None of the failures
+The full core Electron lane (648 tests) is 638 passed, 6 skipped, 4 failed. None of the failures
 is a regression from this fork's colleague-mode work — a build made before those changes fails the
-same way. Two causes:
+same ones — and the failing set varies run to run because the lane runs three Electron apps side by
+side. Two causes:
 
 - **Missing example bundles (4).** `extension-github-view`, `extension-trace-view`,
   `extension-usage-view` and `extension-view-links` load `examples/desktop-extensions/<name>`,
   whose `dist/desktop.js` is a gitignored build artifact that the lane does not build. Build them
   once first — `pnpm --dir examples/desktop-extensions/github run build` (same for `trace`,
   `usage`) — and they pass.
-- **Upstream spec drift / Xvfb (3).** `mentions-diff` expects the `@` menu to list "Trim old tool
+- **Upstream spec drift / Xvfb (3-4).** `mentions-diff` expects the `@` menu to list "Trim old tool
   output", but `buildExtensionMentionOptions` caps that list at 8 alphabetically, so the fork's
-  extra built-ins push it out; typing `@trim` still finds it. `composer-controls` and
-  `side-panel-picker` fail on keyboard shortcuts in this environment.
+  extra built-ins push it out; typing `@trim` still finds it. `composer-controls`,
+  `side-panel-picker` and `settings-general` fail on keyboard shortcuts and focus in this
+  environment.
 
 ## Not yet verified
 
