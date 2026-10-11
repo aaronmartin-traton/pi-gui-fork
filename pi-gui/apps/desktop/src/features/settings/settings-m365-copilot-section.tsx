@@ -9,7 +9,10 @@ import type { CustomProviderConfig, M365CopilotStatus } from "../../../contracts
  */
 
 const POLL_MS = 2000;
-/** Microsoft Store listing for Python 3.12: installs per user, no admin rights needed. */
+/**
+ * Microsoft Store listing for Python 3.12. The installer carries its own Python, so
+ * this is only a fallback for a build whose bundled runtime is missing.
+ */
 const PYTHON_STORE_URL = "https://apps.microsoft.com/detail/9ncvdn91xzqp";
 
 function logFailure(error: unknown): void {
@@ -21,7 +24,7 @@ const STATE_LABEL: Record<M365CopilotStatus["state"], string> = {
   starting: "Starting…",
   "waiting-for-sign-in": "Waiting for sign-in",
   ready: "Connected",
-  "python-missing": "Python needed",
+  "python-missing": "Runtime missing",
   error: "Problem",
 };
 
