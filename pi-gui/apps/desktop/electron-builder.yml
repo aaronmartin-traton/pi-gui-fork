@@ -26,16 +26,6 @@ files:
 extraResources:
   - from: resources/icon.png
     to: icon.png
-  # Local Microsoft 365 Copilot proxy (Python, stdlib only) started by Settings → Microsoft 365 Copilot.
-  - from: resources/m365-copilot-proxy
-    to: m365-copilot-proxy
-    filter:
-      - "**/*"
-      - "!**/__pycache__/**"
-  # Bundled CPython (Windows only), so the app needs no Python on the host.
-  # Populate with: node scripts/fetch-python-runtime.mjs --platform win32
-  - from: resources/python
-    to: python
     filter:
       - "**/*"
 

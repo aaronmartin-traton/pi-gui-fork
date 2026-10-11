@@ -1402,6 +1402,7 @@ export class DesktopAppStore {
     return this.emit();
   }
 
+
   async setEnableTransparency(enabled: boolean): Promise<DesktopAppState> {
     await this.initialize();
     if (this.state.enableTransparency === enabled) {

@@ -328,6 +328,7 @@ export function SecondarySurfaces({
     );
   };
 
+
   const handleRequestNotificationPermission = () => {
     if (!api.requestNotificationPermission) {
       return;

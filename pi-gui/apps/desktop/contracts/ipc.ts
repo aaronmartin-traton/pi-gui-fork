@@ -76,7 +76,7 @@ export const M365_COPILOT_MODEL_ID = "m365-copilot";
 export const M365_COPILOT_CONTEXT_WINDOW = 32_000;
 
 export type M365CopilotState =
-  "stopped" | "starting" | "waiting-for-sign-in" | "ready" | "python-missing" | "error";
+  "stopped" | "starting" | "waiting-for-sign-in" | "ready" | "error";
 
 export interface M365CopilotStatus {
   readonly state: M365CopilotState;

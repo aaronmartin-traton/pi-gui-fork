@@ -14,9 +14,6 @@ if (electronBuilderArgs.length === 0) {
 }
 
 // The installer carries its own CPython, so fetch it before electron-builder copies
-// resources/. Cached: the script no-ops when resources/python already exists.
-await run(process.execPath, [join(here, "fetch-python-runtime.mjs"), "--platform", "win32"], {
-  stdio: "inherit",
 });
 
 process.exit(await runElectronBuilder(electronBuilderArgs));

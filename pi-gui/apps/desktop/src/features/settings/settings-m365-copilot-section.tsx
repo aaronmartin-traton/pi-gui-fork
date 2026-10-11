@@ -9,11 +9,6 @@ import type { CustomProviderConfig, M365CopilotStatus } from "../../../contracts
  */
 
 const POLL_MS = 2000;
-/**
- * Microsoft Store listing for Python 3.12. The installer carries its own Python, so
- * this is only a fallback for a build whose bundled runtime is missing.
- */
-const PYTHON_STORE_URL = "https://apps.microsoft.com/detail/9ncvdn91xzqp";
 
 function logFailure(error: unknown): void {
   console.error("[settings] Microsoft 365 Copilot", error);
@@ -24,7 +19,6 @@ const STATE_LABEL: Record<M365CopilotStatus["state"], string> = {
   starting: "Starting…",
   "waiting-for-sign-in": "Waiting for sign-in",
   ready: "Connected",
-  "python-missing": "Runtime missing",
   error: "Problem",
 };
 
@@ -92,7 +86,7 @@ export function SettingsM365CopilotSection({
           if (next?.state === "ready") {
             setConnecting(false);
             await adoptCopilot(next);
-          } else if (next?.state === "error" || next?.state === "python-missing") {
+          } else if (next?.state === "error") {
             setConnecting(false);
           }
         })
@@ -109,7 +103,7 @@ export function SettingsM365CopilotSection({
     setStatus(next);
     if (next.state === "ready") {
       await adoptCopilot(next);
-    } else if (next.state !== "error" && next.state !== "python-missing") {
+    } else if (next.state !== "error") {
       setConnecting(true);
     }
   }, [adoptCopilot]);
@@ -176,17 +170,6 @@ export function SettingsM365CopilotSection({
                 {connecting ? "Connecting…" : "Connect"}
               </button>
             )}
-            {state === "python-missing" ? (
-              <button
-                className="button button--secondary"
-                type="button"
-                onClick={() => {
-                  window.piApp?.openExternal(PYTHON_STORE_URL).catch(logFailure);
-                }}
-              >
-                Get Python
-              </button>
-            ) : null}
             {status?.managed ? (
               <button
                 className="button button--secondary"
@@ -205,7 +188,6 @@ export function SettingsM365CopilotSection({
             <pre className="m365-log">{status.log.join("\n")}</pre>
           </div>
         ) : null}
-      </div>
-    </section>
+      </div>    </section>
   );
 }
