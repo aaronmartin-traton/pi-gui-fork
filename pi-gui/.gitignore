@@ -36,3 +36,7 @@ index.html
 
 # Local verification evidence (verify-pi-gui runs, proof workspaces)
 /.artifacts/
+
+# Python bytecode from running the vendored proxy locally.
+__pycache__/
+*.pyc
