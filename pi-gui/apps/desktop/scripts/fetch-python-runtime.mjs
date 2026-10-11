@@ -76,34 +76,35 @@ async function exists(path) {
 async function main() {
   const platform = targetPlatform(process.argv.slice(2));
   const force = process.argv.includes("--force");
-  const stamp = join(runtimeDir, "RUNTIME.json");
-  if (!force && (await exists(stamp))) {
-    console.log(`Python runtime already present at ${runtimeDir} (use --force to refetch)`);
-    return;
-  }
-  const url = downloadUrl(platform);
-  const zipPath = join(runtimeDir, "..", `python-${PYTHON_VERSION}-embed.zip`);
-  await mkdir(dirname(zipPath), { recursive: true });
-  console.log(`Downloading ${url}`);
-  await download(url, zipPath);
-  await rm(runtimeDir, { recursive: true, force: true });
-  await mkdir(runtimeDir, { recursive: true });
-  await extract(zipPath, runtimeDir);
-  await rm(zipPath, { force: true });
-
   const exe = join(runtimeDir, platform === "win32" ? "python.exe" : "python3");
-  if (!(await exists(exe))) {
-    throw new Error(`The archive did not contain ${exe}`);
+  if (force || !(await exists(exe))) {
+    const url = downloadUrl(platform);
+    const zipPath = join(runtimeDir, "..", `python-${PYTHON_VERSION}-embed.zip`);
+    await mkdir(dirname(zipPath), { recursive: true });
+    console.log(`Downloading ${url}`);
+    await download(url, zipPath);
+    await rm(runtimeDir, { recursive: true, force: true });
+    await mkdir(runtimeDir, { recursive: true });
+    await extract(zipPath, runtimeDir);
+    await rm(zipPath, { force: true });
+    if (!(await exists(exe))) {
+      throw new Error(`The archive did not contain ${exe}`);
+    }
+  } else {
+    console.log(`Reusing the CPython runtime already at ${runtimeDir}`);
   }
-  // The embeddable `._pth` puts the exe folder on sys.path, so the package is
-  // importable from beside `python.exe` with no PYTHONPATH.
-  await cp(join(proxyDir, "m365copilotproxy"), join(runtimeDir, "m365copilotproxy"), {
+  // Always refresh the proxy package: it changes far more often than the runtime.
+  // The embeddable `._pth` puts the exe folder on sys.path, so the package beside
+  // `python.exe` is importable with no PYTHONPATH.
+  const bundled = join(runtimeDir, "m365copilotproxy");
+  await rm(bundled, { recursive: true, force: true });
+  await cp(join(proxyDir, "m365copilotproxy"), bundled, {
     recursive: true,
     filter: (source) => !source.includes("__pycache__"),
   });
   await writeFile(
-    stamp,
-    `${JSON.stringify({ python: PYTHON_VERSION, source: url, platform }, null, 2)}\n`,
+    join(runtimeDir, "RUNTIME.json"),
+    `${JSON.stringify({ python: PYTHON_VERSION, source: downloadUrl(platform), platform }, null, 2)}\n`,
   );
   console.log(`Bundled CPython ${PYTHON_VERSION} + proxy package at ${runtimeDir}`);
 }
