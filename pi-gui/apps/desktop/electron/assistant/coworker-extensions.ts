@@ -208,26 +208,114 @@ export function findDestructiveCommand(command: string): string | null {
   return null;
 }
 
+const QUOTE_TRANSLATION: ReadonlyArray<readonly [RegExp, string]> = [
+  [/[“”„‟″‶]/g, '"'],
+  [/[‘’‚‛′]/g, "'"],
+  [/[‐-―−]/g, "-"],
+  [/ /g, " "],
+];
+
+/** The command as a shell would see it: ASCII quotes and dashes, no wrapper quote. */
+export function normalizeShellCommand(command: string): string {
+  let normalized = command;
+
+  for (const [pattern, replacement] of QUOTE_TRANSLATION) {
+    normalized = normalized.replace(pattern, replacement);
+  }
+
+  const trimmed = normalized.trim();
+
+  if (trimmed.length >= 2) {
+    const first = trimmed[0];
+    const last = trimmed[trimmed.length - 1];
+
+    if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+      return trimmed.slice(1, -1).trim();
+    }
+  }
+
+  return trimmed;
+}
+
+/** Why a command cannot run as written, or null when it looks runnable. */
+export function findCommandWrappingProblem(command: string): string | null {
+  const trimmed = command.trim();
+
+  if (trimmed.length === 0) return "the command is empty";
+
+  const doubleQuotes = (trimmed.match(/"/g) ?? []).length;
+  const singleQuotes = (trimmed.match(/'/g) ?? []).length;
+
+  if (doubleQuotes % 2 !== 0) return 'an opening " with no closing "';
+  if (singleQuotes % 2 !== 0) return "an opening ' with no closing '";
+
+  if (/[“”„‟″‶‘’‚‛′]/.test(trimmed)) {
+    return "typographic quotes or primes that a shell will not read as quotes";
+  }
+
+  if (trimmed.startsWith("$")) return "a leading shell prompt ($)";
+
+  return null;
+}
+
 /**
  * Refuses destructive shell commands before they run. Unlike "Ask before changes",
  * this is a hard block, not a prompt — the point is to stop the accidental
  * `rm -rf` even when the person would click yes.
  */
-export function createDestructiveCommandGuardExtension(): ExtensionFactory {
+/** How a guarded command may be let through anyway. */
+export interface DestructiveApproval {
+  /** Asked once per blocked command. The answer is never cached. */
+  confirmDestructive(command: string): Promise<boolean>;
+}
+
+/**
+ * Refuses destructive shell commands. A hard block by default, not a prompt.
+ * With an `approval`, the block becomes one explicit question; without a UI, as
+ * in a scheduled run, it stays a hard block.
+ */
+export function createDestructiveCommandGuardExtension(
+  isActive: () => boolean = () => true,
+  approval?: DestructiveApproval,
+): ExtensionFactory {
   return (pi) => {
-    pi.on("tool_call", (event) => {
+    pi.on("tool_call", async (event, ctx) => {
+      if (!isActive()) {
+        return undefined;
+      }
       if (event.toolName !== "bash" && event.toolName !== "powershell") {
         return undefined;
       }
-      const command = typeof event.input.command === "string" ? event.input.command : "";
+      const raw = typeof event.input.command === "string" ? event.input.command : "";
+
+      // On the raw command: normalization would hide the typographic quotes.
+      const wrapping = findCommandWrappingProblem(raw);
+
+      if (wrapping !== null) {
+        return {
+          block: true,
+          reason:
+            `This command cannot run as written: ${wrapping}. ` +
+            "Resend it with plain ASCII quotes and no shell prompt or wrapper, and try again.",
+        };
+      }
+
+      const command = normalizeShellCommand(raw);
+
       if (!findDestructiveCommand(command)) {
         return undefined;
       }
+
+      if (approval !== undefined && ctx.hasUI && (await approval.confirmDestructive(command))) {
+        return undefined;
+      }
+
       return {
         block: true,
         reason:
           "This command is blocked because it can destroy data or the machine. " +
-          "Explain what you are trying to do and use a safer, more specific command.",
+          "If it is genuinely wanted, ask the person to run it themselves, or explain " +
+          "what you are trying to do and use a safer, more specific command.",
       };
     });
   };
