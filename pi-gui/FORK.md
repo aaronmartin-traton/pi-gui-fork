@@ -38,7 +38,9 @@ do. The common ones:
 | Copilot stops answering in new threads | Microsoft limits how many conversations you may start. Keep working in the same thread instead of starting a new one. |
 
 pi asks before it edits a file or runs a command (**Ask before changes**). Turn that off in
-Settings → Skills and extensions if you prefer.
+Settings → Skills and extensions if you prefer, or use **YOLO mode** in Settings → General.
+YOLO mode stops the asking but deliberately leaves the destructive-command guard armed —
+disarming that is a second, separate switch you have to turn on deliberately.
 
 ## What changed
 
@@ -105,6 +107,11 @@ that can be switched off in Settings → Skills and extensions:
   [open-codex](https://github.com/ymichael/open-codex). Every non-read-only tool call (write, edit,
   bash, PowerShell, MCP tools…) asks first. Declining blocks the call and tells the model the user
   said no. Background runs with no UI are allowed through so they don't hang.
+- **YOLO mode** (Settings → General): stops asking before each change. It is *not* "approve
+  everything": **Block destructive commands** stays on, so `rm -rf`, `format`, `del /f /s /q`,
+  `Stop-Computer` and friends are still refused. A second switch, "Also block nothing", is the
+  only thing that disarms the guard — it is worded that way because it is the dangerous one.
+  Both flags persist and reload open threads so a change takes effect on the next tool call.
 - **Trim old tool output:** open-codex's content pruning. Before each model call, tool results
   older than the six most recent are cut to a head and tail if they exceed 1,500 characters. This
   affects only the request; the session file keeps everything.
@@ -134,6 +141,10 @@ PI_APP_TEST_LANE=core PI_APP_REAL_AUTH=0 PI_APP_TEST_MODE=background \
 
 Ask before changes is off under the e2e harness (`PI_APP_TEST_MODE`) so upstream specs with
 scripted tools keep running unattended. A spec opts in with `PI_GUI_ASK_BEFORE_CHANGES=1`.
+YOLO mode does not affect the harness either way.
+
+The yolo contract is covered by `apps/desktop/tests/unit/yolo-mode.spec.ts`, which drives the
+real extension factories: it fails if turning yolo on ever disarms the destructive guard.
 
 ## Verification status
 
