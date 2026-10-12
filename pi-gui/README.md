@@ -94,6 +94,11 @@ Download the latest `.dmg` (macOS), `.AppImage` or `.deb` (Linux), or `.exe` (Wi
 - **Windows:** run the setup `.exe`, or use the portable `.exe`. Builds are not code-signed
   yet, so SmartScreen may ask you to confirm.
 
+**Nothing to install first.** pi-gui bundles its own runtime: Electron ships Chromium and
+Node inside the app, so there is no separate Node, Bun, Python or WebView2 install, and no
+package manager on the machine. It installs per-user and needs no administrator rights. The
+sign-in browser is Chrome or Edge, if the machine has one.
+
 On macOS you can also use Homebrew:
 
 ```bash
