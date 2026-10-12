@@ -442,6 +442,13 @@ contextBridge.exposeInMainWorld("piApp", {
     ) as Promise<DesktopAppState>,
   setEnableTransparency: (enabled: boolean) =>
     ipcRenderer.invoke(desktopIpc.setEnableTransparency, enabled) as Promise<DesktopAppState>,
+  setYoloMode: (enabled: boolean) =>
+    ipcRenderer.invoke(desktopIpc.setYoloMode, enabled) as Promise<DesktopAppState>,
+  setYoloDisableDestructiveGuard: (enabled: boolean) =>
+    ipcRenderer.invoke(
+      desktopIpc.setYoloDisableDestructiveGuard,
+      enabled,
+    ) as Promise<DesktopAppState>,
   setThemePresetId: (presetId: ThemePresetId) =>
     ipcRenderer.invoke(desktopIpc.setThemePresetId, presetId) as Promise<DesktopAppState>,
   ensureTerminalPanel: (

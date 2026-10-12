@@ -379,6 +379,10 @@ export interface DesktopAppState {
   /** Folder groups the user collapsed in the sidebar, by workspace id. */
   readonly collapsedWorkspaceIds: readonly string[];
   readonly enableTransparency: boolean;
+  /** YOLO mode: pi stops asking before each change. The destructive guard stays. */
+  readonly yoloMode: boolean;
+  /** The separate opt-out that also disarms the destructive-command guard. */
+  readonly yoloDisableDestructiveGuard: boolean;
   readonly startupDiagnostics: readonly StartupDiagnostic[];
   readonly revision: number;
   readonly lastError?: string;
@@ -436,6 +440,8 @@ export function createEmptyDesktopAppState(): DesktopAppState {
     threadGrouping: "time",
     collapsedWorkspaceIds: [],
     enableTransparency: false,
+    yoloMode: false,
+    yoloDisableDestructiveGuard: false,
     startupDiagnostics: [],
     revision: 0,
   };

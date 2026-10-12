@@ -165,6 +165,8 @@ type SettingsOwner = Pick<
   | "setNotificationPreferences"
   | "setIntegratedTerminalShell"
   | "setEnableTransparency"
+  | "setYoloMode"
+  | "setYoloDisableDestructiveGuard"
   | "getSkillFilePath"
   | "getExtensionFilePath"
 >;
@@ -704,6 +706,22 @@ export function registerDesktopIpc({
       owners.settings.setIntegratedTerminalShell(expectString(rawShellPath, "shellPath")),
     ),
   );
+  ipcMain.handle(desktopIpc.setYoloMode, async (event, rawEnabled: unknown) => {
+    const window = senderWindow(windows, event);
+    const enabled = expectBoolean(rawEnabled, "enabled");
+    return windows.runUnscopedStateAction(window, async () =>
+      owners.settings.setYoloMode(enabled),
+    );
+  });
+
+  ipcMain.handle(desktopIpc.setYoloDisableDestructiveGuard, async (event, rawEnabled: unknown) => {
+    const window = senderWindow(windows, event);
+    const enabled = expectBoolean(rawEnabled, "enabled");
+    return windows.runUnscopedStateAction(window, async () =>
+      owners.settings.setYoloDisableDestructiveGuard(enabled),
+    );
+  });
+
   ipcMain.handle(desktopIpc.setEnableTransparency, async (event, rawEnabled: unknown) => {
     const window = senderWindow(windows, event);
     const enabled = expectBoolean(rawEnabled, "enabled");

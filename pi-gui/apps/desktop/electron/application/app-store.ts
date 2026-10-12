@@ -282,6 +282,10 @@ export class DesktopAppStore {
   private readonly scheduledTaskOwner: ScheduledTaskOwner;
   /** App-wide: built-in pi-gui extensions the user switched off in Settings. */
   private readonly disabledBuiltinExtensions = new Set<string>();
+  /** YOLO mode. Does not disarm the destructive guard; `yoloDisableDestructiveGuard` does. */
+  private yoloMode = false;
+  /** The separate, explicit opt-out that also disarms the destructive guard. */
+  private yoloDisableDestructiveGuard = false;
   /** Flag values last chosen in New thread, by root workspace: the next thread's defaults. */
   private readonly extensionFlagsByWorkspace = new Map<string, ExtensionFlagValues>();
 
@@ -291,7 +295,11 @@ export class DesktopAppStore {
     const driverOptions: PiSdkDriverConfig = {
       catalogStorage: this.catalogStore,
       ...(options.driverOptions ?? {}),
-      isBuiltinExtensionEnabled: (name) => !this.disabledBuiltinExtensions.has(name),
+      isBuiltinExtensionEnabled: (name) =>
+        // Wins over the disabled set so Settings shows the guard's real state.
+        name === "pi-gui-destructive-command-guard" && this.yoloDisableDestructiveGuard
+          ? false
+          : !this.disabledBuiltinExtensions.has(name),
       extensionFlagValuesForSession: (sessionRef) =>
         this.sessionState.extensionFlagsBySession.get(sessionKey(sessionRef)),
       ...(options.generateThreadTitleOverride
@@ -1402,6 +1410,77 @@ export class DesktopAppStore {
     return this.emit();
   }
 
+  /** Whether YOLO mode is on. Read live by the extension factories in main.ts. */
+  isYoloMode(): boolean {
+    return this.yoloMode;
+  }
+
+  /** Whether YOLO mode's separate opt-out has disarmed the destructive guard. */
+  yoloDisablesDestructiveGuard(): boolean {
+    return this.yoloDisableDestructiveGuard;
+  }
+
+  /** Turn YOLO mode on or off. */
+  async setYoloMode(enabled: boolean): Promise<DesktopAppState> {
+    return this.setYoloFlags({ yoloMode: enabled });
+  }
+
+  /** The separate opt-out that also disarms the destructive-command guard. */
+  async setYoloDisableDestructiveGuard(enabled: boolean): Promise<DesktopAppState> {
+    return this.setYoloFlags({ yoloDisableDestructiveGuard: enabled });
+  }
+
+  private async setYoloFlags(flags: {
+    yoloMode?: boolean;
+    yoloDisableDestructiveGuard?: boolean;
+  }): Promise<DesktopAppState> {
+    await this.initialize();
+    const nextYolo = flags.yoloMode ?? this.yoloMode;
+    const nextGuardOff = flags.yoloDisableDestructiveGuard ?? this.yoloDisableDestructiveGuard;
+    if (nextYolo === this.yoloMode && nextGuardOff === this.yoloDisableDestructiveGuard) {
+      return structuredClone(this.state);
+    }
+    const wasYolo = this.yoloMode;
+    const wasGuardOff = this.yoloDisableDestructiveGuard;
+    this.yoloMode = nextYolo;
+    this.yoloDisableDestructiveGuard = nextGuardOff;
+    this.state = {
+      ...this.state,
+      yoloMode: this.yoloMode,
+      yoloDisableDestructiveGuard: this.yoloDisableDestructiveGuard,
+      lastError: undefined,
+      revision: this.state.revision + 1,
+    };
+    try {
+      await this.persistUiState();
+    } catch (error) {
+      // The factories read these live, so an unsaved change must not persist.
+      this.yoloMode = wasYolo;
+      this.yoloDisableDestructiveGuard = wasGuardOff;
+      this.state = {
+        ...this.state,
+        yoloMode: wasYolo,
+        yoloDisableDestructiveGuard: wasGuardOff,
+        revision: this.state.revision - 1,
+      };
+      return this.withError(error);
+    }
+    return this.withErrorHandling(async () => {
+      // Reload open threads: the extension factories read these flags when a
+      // session starts, so a running thread would keep the old policy until it
+      // is reopened. Mirrors setBuiltinExtensionEnabled.
+      const workspaces = this.state.workspaces.map((workspace) => workspace.id);
+
+      if (workspaces.length > 0) {
+        await this.refreshRuntime(this.state.workspaces[0]!.id);
+      }
+
+      await this.reloadOpenSessions(workspaces);
+      await this.refreshSessionCommandsForAllWorkspaces();
+
+      return this.refreshState({ clearLastError: true });
+    });
+  }
 
   async setEnableTransparency(enabled: boolean): Promise<DesktopAppState> {
     await this.initialize();
@@ -2204,6 +2283,9 @@ export class DesktopAppStore {
     for (const name of persisted.disabledBuiltinExtensions ?? []) {
       this.disabledBuiltinExtensions.add(name);
     }
+    this.yoloMode = persisted.yoloMode ?? this.yoloMode;
+    this.yoloDisableDestructiveGuard =
+      persisted.yoloDisableDestructiveGuard ?? this.yoloDisableDestructiveGuard;
     this.taskWorkbenchTemplatesBySession.clear();
     for (const [key, template] of Object.entries(persisted.taskWorkbenchTemplatesBySession ?? {})) {
       this.taskWorkbenchTemplatesBySession.set(key, template);
@@ -2227,6 +2309,9 @@ export class DesktopAppStore {
       pinnedAtBySession: persisted.pinnedAtBySession ?? {},
       pinnedSessionOrder: persisted.pinnedSessionOrder ?? [],
       workspaceOrder: persisted.workspaceOrder ?? [],
+      yoloMode: persisted.yoloMode ?? this.state.yoloMode,
+      yoloDisableDestructiveGuard:
+        persisted.yoloDisableDestructiveGuard ?? this.state.yoloDisableDestructiveGuard,
       themeMode: persisted.themeMode ?? this.state.themeMode,
       themePresetId: persisted.themePresetId ?? this.state.themePresetId,
       sidebarCollapsed: persisted.sidebarCollapsed ?? this.state.sidebarCollapsed,
@@ -4007,6 +4092,8 @@ export class DesktopAppStore {
       collapsedWorkspaceIds:
         this.state.collapsedWorkspaceIds.length > 0 ? this.state.collapsedWorkspaceIds : undefined,
       enableTransparency: this.state.enableTransparency,
+      yoloMode: this.state.yoloMode,
+      yoloDisableDestructiveGuard: this.state.yoloDisableDestructiveGuard,
       orchestrationChildren: orchestration.toPersistedOrchestrationChildren(
         this.state.orchestrationChildren,
       ),

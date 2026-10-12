@@ -221,6 +221,8 @@ export const desktopIpc = {
   setNotificationPreferences: "pi-gui:set-notification-preferences",
   setIntegratedTerminalShell: "pi-gui:set-integrated-terminal-shell",
   setEnableTransparency: "pi-gui:set-enable-transparency",
+  setYoloMode: "pi-gui:set-yolo-mode",
+  setYoloDisableDestructiveGuard: "pi-gui:set-yolo-disable-destructive-guard",
   terminalEnsurePanel: "pi-gui:terminal-ensure-panel",
   terminalCreateSession: "pi-gui:terminal-create-session",
   terminalSetActiveSession: "pi-gui:terminal-set-active-session",
@@ -850,6 +852,10 @@ export interface PiDesktopApi {
   ): Promise<DesktopAppState>;
   setIntegratedTerminalShell(shell: string): Promise<DesktopAppState>;
   setEnableTransparency(enabled: boolean): Promise<DesktopAppState>;
+  /** YOLO mode: stop asking before each change. */
+  setYoloMode(enabled: boolean): Promise<DesktopAppState>;
+  /** The separate opt-out that also disarms the destructive-command guard. */
+  setYoloDisableDestructiveGuard(enabled: boolean): Promise<DesktopAppState>;
   setThemePresetId(presetId: ThemePresetId): Promise<DesktopAppState>;
   ensureTerminalPanel(
     workspaceId: string,

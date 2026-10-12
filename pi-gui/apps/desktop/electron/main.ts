@@ -108,6 +108,33 @@ const windowTestMode = appTestMode ?? "foreground";
 const devReloadMarkersEnabled = process.env.PI_APP_DEV_RELOAD_MARKERS === "1";
 const TURN_CAPTURE_BACKSTOP_MS = 10_000;
 let store: DesktopAppStore;
+
+/** YOLO mode, read live so a change reaches the next session reload. */
+const yoloModeActive = (): boolean => store?.isYoloMode() === true;
+
+/** Whether YOLO's separate opt-out has disarmed the destructive guard. */
+const yoloDisablesGuard = (): boolean => store?.yoloDisablesDestructiveGuard() === true;
+
+/** The one escape from the guard: show the command, ask once, allow this one only. */
+async function confirmDestructiveCommand(command: string): Promise<boolean> {
+  const window = mainWindow && canPublishToWindow(mainWindow) ? mainWindow : undefined;
+  const options = {
+    type: "warning" as const,
+    message: "Run this destructive command?",
+    detail:
+      `${command}\n\nThis can delete files or data irrecoverably. ` +
+      "It will run once. Anything else is still blocked.",
+    buttons: ["Run it once", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+  };
+
+  const { response } = window
+    ? await dialog.showMessageBox(window, options)
+    : await dialog.showMessageBox(options);
+
+  return response === 0;
+}
 let extensionViewOwner: DesktopExtensionViewOwner | undefined;
 let windowOwner: WindowOwner;
 const themeManager = new ThemeManager();
@@ -1034,7 +1061,9 @@ app
           name: "pi-gui-destructive-command-guard",
           displayName: "Block destructive commands",
           description: "Refuses commands that can destroy data or the machine",
-          factory: createDestructiveCommandGuardExtension(),
+          // YOLO mode does NOT turn this off; only its own opt-out does, so
+          // "stop asking me" never silently disarms the safety net.
+          factory: createDestructiveCommandGuardExtension(() => !yoloDisablesGuard()),
         },
         {
           name: "pi-gui-ask-before-changes",
@@ -1042,7 +1071,9 @@ app
           description: "pi asks before it edits files or runs commands",
           // E2E runs drive scripted tools unattended; a test opts in with PI_GUI_ASK_BEFORE_CHANGES=1.
           factory: createAskBeforeChangesExtension(
-            () => !process.env.PI_APP_TEST_MODE || process.env.PI_GUI_ASK_BEFORE_CHANGES === "1",
+            () =>
+              !yoloModeActive() &&
+              (!process.env.PI_APP_TEST_MODE || process.env.PI_GUI_ASK_BEFORE_CHANGES === "1"),
           ),
         },
         {

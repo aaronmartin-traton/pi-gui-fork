@@ -452,6 +452,22 @@ export function SecondarySurfaces({
           themeMode={snapshot.themeMode}
           themePresetId={snapshot.themePresetId}
           enableTransparency={snapshot.enableTransparency}
+          yoloMode={snapshot.yoloMode}
+          yoloDisableDestructiveGuard={snapshot.yoloDisableDestructiveGuard}
+          onSetYoloMode={(enabled) => {
+            void updateSnapshot(setSnapshot, () => api.setYoloMode(enabled)).catch(
+              (error: unknown) => {
+                console.error("[renderer] setYoloMode failed", error);
+              },
+            );
+          }}
+          onSetYoloDisableDestructiveGuard={(enabled) => {
+            void updateSnapshot(setSnapshot, () =>
+              api.setYoloDisableDestructiveGuard(enabled),
+            ).catch((error: unknown) => {
+              console.error("[renderer] setYoloDisableDestructiveGuard failed", error);
+            });
+          }}
           onLoginProvider={handleLoginProvider}
           onSelectSection={onSelectSettingsSection}
           onLogoutProvider={handleLogoutProvider}

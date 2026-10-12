@@ -11,6 +11,10 @@ interface SettingsGeneralSectionProps {
   readonly onSetModelSettingsScopeMode: (mode: ModelSettingsScopeMode) => void;
   readonly onSetIntegratedTerminalShell: (shellPath: string) => void;
   readonly onToggleSkillCommands: (enabled: boolean) => void;
+  readonly yoloMode: boolean;
+  readonly yoloDisableDestructiveGuard: boolean;
+  readonly onSetYoloMode: (enabled: boolean) => void;
+  readonly onSetYoloDisableDestructiveGuard: (enabled: boolean) => void;
 }
 
 export function SettingsGeneralSection({
@@ -20,6 +24,10 @@ export function SettingsGeneralSection({
   onSetModelSettingsScopeMode,
   onSetIntegratedTerminalShell,
   onToggleSkillCommands,
+  yoloMode,
+  yoloDisableDestructiveGuard,
+  onSetYoloMode,
+  onSetYoloDisableDestructiveGuard,
 }: SettingsGeneralSectionProps) {
   const [terminalShellDraft, setTerminalShellDraft] = useState(integratedTerminalShell);
 
@@ -60,6 +68,24 @@ export function SettingsGeneralSection({
             onChange={onToggleSkillCommands}
           />
         </SettingsRow>
+        <SettingsRow
+          title="YOLO mode"
+          description="Stop asking before each file change or command. Commands that can destroy data or the machine stay blocked."
+        >
+          <SettingsSwitch checked={yoloMode} label="Enable YOLO mode" onChange={onSetYoloMode} />
+        </SettingsRow>
+        {yoloMode ? (
+          <SettingsRow
+            title="Also block nothing"
+            description="YOLO mode normally still refuses destructive commands. Turn this on only if you trust the work being done and understand it can delete files, wipe disks or stop the machine."
+          >
+            <SettingsSwitch
+              checked={yoloDisableDestructiveGuard}
+              label="Also disable the destructive command guard"
+              onChange={onSetYoloDisableDestructiveGuard}
+            />
+          </SettingsRow>
+        ) : null}
       </SettingsGroup>
 
       <SettingsGroup title="Terminal">

@@ -53,6 +53,10 @@ export interface PersistedUiState {
   readonly collapsedWorkspaceIds?: readonly string[];
   readonly allowMultiple?: boolean;
   readonly enableTransparency?: boolean;
+  /** YOLO mode: auto-approve changes. The destructive guard is unaffected. */
+  readonly yoloMode?: boolean;
+  /** The separate opt-out that also disarms the destructive-command guard. */
+  readonly yoloDisableDestructiveGuard?: boolean;
   readonly themeMode?: ThemeMode;
   readonly themePresetId?: ThemePresetId;
   readonly orchestrationChildren?: readonly OrchestrationChildThread[];
@@ -131,6 +135,11 @@ export function decodePersistedUiState(parsed: unknown): LegacyPersistedUiState 
       typeof candidate.allowMultiple === "boolean" ? candidate.allowMultiple : undefined,
     enableTransparency:
       typeof candidate.enableTransparency === "boolean" ? candidate.enableTransparency : undefined,
+    yoloMode: typeof candidate.yoloMode === "boolean" ? candidate.yoloMode : undefined,
+    yoloDisableDestructiveGuard:
+      typeof candidate.yoloDisableDestructiveGuard === "boolean"
+        ? candidate.yoloDisableDestructiveGuard
+        : undefined,
     themeMode: toThemeMode(candidate.themeMode),
     themePresetId: toThemePresetId(candidate.themePresetId),
     orchestrationChildren: toPersistedOrchestrationChildren(candidate.orchestrationChildren),
@@ -225,6 +234,8 @@ function validateUiState(value: unknown): Record<string, unknown> {
       "collapsedWorkspaceIds",
       "allowMultiple",
       "enableTransparency",
+      "yoloMode",
+      "yoloDisableDestructiveGuard",
       "themeMode",
       "themePresetId",
       "orchestrationChildren",
@@ -276,7 +287,13 @@ function validateUiState(value: unknown): Record<string, unknown> {
     "collapsedWorkspaceIds",
   ])
     optional(root, key, strings);
-  for (const key of ["sidebarCollapsed", "allowMultiple", "enableTransparency"])
+  for (const key of [
+    "sidebarCollapsed",
+    "allowMultiple",
+    "enableTransparency",
+    "yoloMode",
+    "yoloDisableDestructiveGuard",
+  ])
     optional(root, key, boolean);
   optional(root, "activeView", (v) => toAppView(v) !== undefined);
   optional(root, "threadGrouping", isThreadGrouping);

@@ -41,6 +41,10 @@ interface SettingsViewProps {
   readonly themeMode: "system" | "light" | "dark";
   readonly themePresetId: ThemePresetId;
   readonly enableTransparency: boolean;
+  readonly yoloMode: boolean;
+  readonly yoloDisableDestructiveGuard: boolean;
+  readonly onSetYoloMode: (enabled: boolean) => void;
+  readonly onSetYoloDisableDestructiveGuard: (enabled: boolean) => void;
   readonly onSetModelSettingsScopeMode: (mode: ModelSettingsScopeMode) => void;
   readonly onSetDefaultModel: (provider: string, modelId: string) => void;
   readonly onSetThinkingLevel: (
@@ -79,6 +83,10 @@ export function SettingsView({
   themeMode,
   themePresetId,
   enableTransparency,
+  yoloMode,
+  yoloDisableDestructiveGuard,
+  onSetYoloMode,
+  onSetYoloDisableDestructiveGuard,
   onSetModelSettingsScopeMode,
   onSetDefaultModel,
   onSetThinkingLevel,
@@ -157,6 +165,10 @@ export function SettingsView({
               onSetModelSettingsScopeMode={onSetModelSettingsScopeMode}
               onSetIntegratedTerminalShell={onSetIntegratedTerminalShell}
               onToggleSkillCommands={onToggleSkillCommands}
+              yoloMode={yoloMode}
+              yoloDisableDestructiveGuard={yoloDisableDestructiveGuard}
+              onSetYoloMode={onSetYoloMode}
+              onSetYoloDisableDestructiveGuard={onSetYoloDisableDestructiveGuard}
             />
           ) : null}
 
