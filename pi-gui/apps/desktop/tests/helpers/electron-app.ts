@@ -267,8 +267,17 @@ function createDesktopHarness(electronApp: ElectronApplication): DesktopHarness 
       // Playwright's Electron video recorder can expose an empty page before the
       // real BrowserWindow finishes loadURL. firstWindow() would attach to that
       // placeholder and hang on domcontentloaded.
-      page = await waitForDesktopRendererPage(electronApp);
-      await page.waitForLoadState("domcontentloaded");
+      try {
+        page = await waitForDesktopRendererPage(electronApp);
+      } catch (error) {
+        const process = electronApp.process();
+        const processStatus =
+          `\n\nElectron process: exitCode=${process.exitCode ?? "running"}, ` +
+          `signalCode=${process.signalCode ?? "none"}.`;
+        const stderr = outputTail.length ? `\n\nElectron stderr:\n${outputTail.join("\n")}` : "";
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message}${processStatus}${stderr}`, { cause: error });
+      }
       await page.waitForFunction(() => Boolean(globalThis.window.piApp), undefined, {
         timeout: 15_000,
       });

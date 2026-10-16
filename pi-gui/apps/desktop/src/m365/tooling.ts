@@ -427,7 +427,7 @@ function shellPrompt(tools: readonly Record<string, unknown>[]): string {
   const shell = findShellTool(tools);
   if (shell === null) return "";
   const name = stringField(functionObject(shell), "name");
-  return `\n\nTHE WAY YOU DO ANYTHING IS BY WRITING A SHELL SCRIPT. The \`${name}\` tool runs commands against the user's real working directory. A fenced block is an action the harness executes and returns as a ${TOOL_RESPONSE_TAG}; it is not an illustration.`;
+  return `\n\nTHE WAY YOU DO ANYTHING IS BY WRITING A SHELL SCRIPT. The \`${name}\` tool runs commands against the user's real working directory. For each action, emit one fenced tool call whose info-string is exactly \`${name}\`; the harness executes it and returns the result as a ${TOOL_RESPONSE_TAG}. A fenced block is an action, not an illustration.`;
 }
 
 function isWindows(): boolean {

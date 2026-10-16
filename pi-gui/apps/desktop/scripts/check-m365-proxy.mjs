@@ -16,19 +16,21 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { createRequire } from "node:module";
+import { build as esbuildBuild } from "esbuild";
 
 const run = promisify(execFile);
-const require = createRequire(import.meta.url);
 const desktopDir = join(dirname(fileURLToPath(import.meta.url)), "..");
 const entry = join(desktopDir, "src", "m365", "e2e.ts");
 
-/** esbuild resolves the repo's `./x.js` sibling specifiers through the `.ts` sources. */
+/** Bundle the TypeScript fixture through esbuild's platform-aware JS API. */
 async function bundle(output) {
-  // `bin/esbuild` is a native binary, so it must be executed directly, not via node.
-  const bin = require.resolve("esbuild").replace(/lib\/main\.js$/, "bin/esbuild");
-  await run(bin, [entry, "--bundle", "--platform=node", "--format=esm", `--outfile=${output}`, "--log-level=warning"], {
-    timeout: 120_000,
+  await esbuildBuild({
+    entryPoints: [entry],
+    bundle: true,
+    platform: "node",
+    format: "esm",
+    outfile: output,
+    logLevel: "warning",
   });
 }
 

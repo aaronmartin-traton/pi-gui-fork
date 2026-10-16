@@ -19,9 +19,9 @@ function runSession(platform: NodeJS.Platform, tools: string[]): string[][] {
   return calls;
 }
 
-test("adds pi's powershell tool on Windows", () => {
+test("prioritizes pi's powershell tool before bash on Windows", () => {
   expect(runSession("win32", ["read", "bash", "edit", "write"])).toEqual([
-    ["read", "bash", "edit", "write", "powershell"],
+    ["read", "powershell", "bash", "edit", "write"],
   ]);
 });
 
@@ -30,6 +30,12 @@ test("does nothing on other platforms", () => {
   expect(runSession("darwin", ["read", "bash", "edit", "write"])).toEqual([]);
 });
 
-test("is idempotent when powershell is already active", () => {
-  expect(runSession("win32", ["read", "bash", "edit", "write", "powershell"])).toEqual([]);
+test("moves an already-active powershell tool before bash", () => {
+  expect(runSession("win32", ["read", "bash", "edit", "write", "powershell"])).toEqual([
+    ["read", "powershell", "bash", "edit", "write"],
+  ]);
+});
+
+test("is idempotent when powershell is already ahead of bash", () => {
+  expect(runSession("win32", ["read", "powershell", "bash", "edit", "write"])).toEqual([]);
 });

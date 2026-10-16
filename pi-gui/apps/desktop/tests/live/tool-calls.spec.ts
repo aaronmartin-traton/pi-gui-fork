@@ -1,3 +1,5 @@
+import { readFile, rm } from "node:fs/promises";
+import { dirname, join } from "node:path";
 import { expect, test } from "@playwright/test";
 import {
   createNamedThread,
@@ -51,5 +53,52 @@ test("renders a real tool call item that expands and collapses from the transcri
     await expect(toolItem.locator(".timeline-tool__body")).toHaveCount(0);
   } finally {
     await harness.close();
+  }
+});
+
+test("routes a live PowerShell call that edits a workspace file through the external M365 proxy", async () => {
+  test.setTimeout(180_000);
+  test.skip(process.platform !== "win32", "The PowerShell tool is available only on Windows.");
+  const realAuth = getRealAuthConfig();
+  test.skip(!realAuth.enabled, realAuth.skipReason);
+  test.skip(
+    !process.env.PI_GUI_M365_PROXY_URL,
+    "Set PI_GUI_M365_PROXY_URL to the standalone M365 proxy URL.",
+  );
+
+  const userDataDir = await makeUserDataDir();
+  const workspacePath = await makeWorkspace("powershell-tool-workspace");
+  const proofPath = join(workspacePath, "powershell-tool-proof.txt");
+  const harness = await launchDesktop(userDataDir, {
+    initialWorkspaces: [workspacePath],
+    testMode: "background",
+    realAuthSourceDir: realAuth.sourceDir,
+  });
+
+  try {
+    const window = await harness.firstWindow();
+    await createNamedThread(window, "PowerShell tool test");
+
+    const composer = window.getByTestId("composer");
+    await composer.fill(
+      [
+        "Use the powershell tool, not bash. Emit one fenced powershell block with these commands:",
+        "Set-Content -LiteralPath 'powershell-tool-proof.txt' -Value 'PI_GUI_POWERSHELL_EDIT_OK' -NoNewline",
+        "Get-Content -Raw -LiteralPath 'powershell-tool-proof.txt'",
+        "Then reply exactly POWERSHELL_TOOL_OK.",
+      ].join("\n"),
+    );
+
+    await expect(
+      window.locator(".timeline-item--assistant .message__content").last(),
+    ).toContainText("POWERSHELL_TOOL_OK", { timeout: 150_000 });
+    const toolItem = window.locator(".timeline-tool").first();
+    await expect(toolItem).toContainText(/powershell/i);
+    await expect
+      .poll(() => readFile(proofPath, "utf8").catch(() => ""), { timeout: 30_000 })
+      .toBe("PI_GUI_POWERSHELL_EDIT_OK");
+  } finally {
+    await harness.close();
+    await rm(dirname(workspacePath), { recursive: true, force: true });
   }
 });

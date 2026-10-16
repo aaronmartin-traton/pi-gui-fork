@@ -920,6 +920,11 @@ async function checkChatToolLoops(base: string): Promise<ChatLoopBaseline> {
     { command: "Get-ChildItem" },
     "powershell tool loop arguments",
   );
+  const powershellPrompt = lastRecord().prompt;
+  check(
+    powershellPrompt.includes('info-string is exactly `powershell`'),
+    `PowerShell prompt does not identify the callable fence: ${powershellPrompt}`,
+  );
 
   return { call, conversationId: first.conversationId };
 }

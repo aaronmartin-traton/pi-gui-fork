@@ -1319,8 +1319,8 @@ app
       },
     });
 
+    await startM365CopilotAtLaunch(store);
     createAppWindow();
-    startM365CopilotAtLaunch(store);
     void notificationPermissionService.getCurrentStatus().catch((error: unknown) => {
       console.error("[main] getCurrentStatus failed", error);
     });
@@ -1709,8 +1709,12 @@ function getM365CopilotConnector(): M365CopilotConnector {
  * closed port: the onboarding notice stays hidden and the first message fails with
  * a raw connection error. Bind the port when that provider is registered or saved
  * as the default. Listen only — Edge opens when the person clicks Connect.
+ *
+ * An explicit PI_GUI_M365_PROXY_URL also updates the pi-gui-managed provider entry.
+ * The connector status alone is not enough: pi's model runtime reads its endpoint
+ * from models.json, independently of the health-check URL.
  */
-function startM365CopilotAtLaunch(appStore: DesktopAppStore): void {
+async function startM365CopilotAtLaunch(appStore: DesktopAppStore): Promise<void> {
   const registered = Object.values(appStore.snapshot().runtimeByWorkspace).some(
     (runtime) =>
       runtime.settings.defaultProvider === M365_COPILOT_PROVIDER_ID ||
@@ -1719,18 +1723,37 @@ function startM365CopilotAtLaunch(appStore: DesktopAppStore): void {
   if (!registered) {
     return;
   }
-  void getM365CopilotConnector()
-    .start({ signIn: false })
-    .then((status) => {
-      if (status.state === "error") {
-        console.error(
-          `[main] Microsoft 365 Copilot proxy did not start: ${status.detail ?? "unknown error"}`,
-        );
-      }
-    })
-    .catch((error: unknown) => {
-      console.error("[main] Microsoft 365 Copilot proxy failed to start", error);
-    });
+
+  try {
+    const status = await getM365CopilotConnector().start({ signIn: false });
+    if (status.state === "error") {
+      console.error(
+        `[main] Microsoft 365 Copilot proxy did not start: ${status.detail ?? "unknown error"}`,
+      );
+    }
+    if (!process.env.PI_GUI_M365_PROXY_URL?.trim()) {
+      return;
+    }
+
+    const provider = (await appStore.listCustomProviders()).find(
+      (entry) => entry.providerId === M365_COPILOT_PROVIDER_ID,
+    );
+    const workspaceId = appStore.snapshot().workspaces[0]?.id;
+    if (!provider || !workspaceId) {
+      console.error(
+        "[main] PI_GUI_M365_PROXY_URL is set, but the M365 provider endpoint could not be synchronized.",
+      );
+      return;
+    }
+    if (provider.baseUrl !== status.baseUrl) {
+      await appStore.setCustomProvider(workspaceId, {
+        ...provider,
+        baseUrl: status.baseUrl,
+      });
+    }
+  } catch (error: unknown) {
+    console.error("[main] Microsoft 365 Copilot proxy setup failed", error);
+  }
 }
 
 async function probeCustomProviderModels(

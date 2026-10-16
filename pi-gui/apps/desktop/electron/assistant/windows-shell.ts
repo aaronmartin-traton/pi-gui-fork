@@ -20,9 +20,16 @@ export function createWindowsShellExtension(
     if (platform !== "win32") return;
     pi.on("session_start", () => {
       const tools = pi.getActiveTools();
-      if (!tools.includes("powershell")) {
-        pi.setActiveTools([...tools, "powershell"]);
+      const powershellIndex = tools.indexOf("powershell");
+      const bashIndex = tools.indexOf("bash");
+      if (powershellIndex !== -1 && (bashIndex === -1 || powershellIndex < bashIndex)) {
+        return;
       }
+
+      const nextTools = tools.filter((tool) => tool !== "powershell");
+      const nextBashIndex = nextTools.indexOf("bash");
+      nextTools.splice(nextBashIndex === -1 ? nextTools.length : nextBashIndex, 0, "powershell");
+      pi.setActiveTools(nextTools);
     });
   };
 }
